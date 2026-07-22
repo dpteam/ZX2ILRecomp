@@ -2455,6 +2455,9 @@ namespace ZX2ILRecomp
             sb.AppendLine("public static byte[][] InitialRam = new byte[8][];");
             sb.AppendLine("public static byte[][] RamBanks = new byte[8][];");
             sb.AppendLine("public static byte[] KeyMatrix = new byte[8];");
+            sb.AppendLine("public static volatile int LastKey = -1;");
+            sb.AppendLine("public static volatile ushort LastKeyPort;");
+            sb.AppendLine("public static volatile byte LastKeyRead;");
             sb.AppendLine("public static byte Kempston;");
             sb.AppendLine("public static byte[] Parity = new byte[256];");
             sb.AppendLine("public static long InsCount;");
@@ -3041,12 +3044,19 @@ namespace ZX2ILRecomp
             sb.AppendLine("Halted = false;");
             sb.AppendLine("}");
 
+            // NoInlining критичен: вызов ReadPort из tight-loop опроса клавиатуры
+            // работает как барьер — JIT не сможет hoist-нуть чтение KeyMatrix из цикла.
+            sb.AppendLine("[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]");
             sb.AppendLine("public static byte ReadPort(ushort port)");
             sb.AppendLine("{");
+            // Барьер видимости: записи KeyMatrix из UI-потока должны быть видны CPU-потоку.
+            sb.AppendLine("System.Threading.Thread.MemoryBarrier();");
             sb.AppendLine("if ((port & 1) == 0)");
             sb.AppendLine("{");
             sb.AppendLine("int high = port >> 8; int res = 0xFF;");
-            sb.AppendLine("for (int i = 0; i < 8; i++) if ((high & (1 << i)) == 0) res &= KeyMatrix[i];");
+            sb.AppendLine("for (int i = 0; i < 8; i++) { if ((high & (1 << i)) == 0) { System.Threading.Thread.MemoryBarrier(); res &= KeyMatrix[i]; } }");
+            // Отладочный снимок последней прочитанной строки матрицы (для диагностики).
+            sb.AppendLine("LastKeyPort = (ushort)port; LastKeyRead = (byte)(res & 0xBF);");
             sb.AppendLine("return (byte)(res & 0xBF);");
             sb.AppendLine("}");
             sb.AppendLine("if (port == 0x7FFD || (port & 0x8002) == 0) return Port7FFD;");
@@ -3057,8 +3067,10 @@ namespace ZX2ILRecomp
             sb.AppendLine("return 0xFF;");
             sb.AppendLine("}");
 
+            sb.AppendLine("[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]");
             sb.AppendLine("public static void WritePort(ushort port, byte value)");
             sb.AppendLine("{");
+            sb.AppendLine("System.Threading.Thread.MemoryBarrier();");
             sb.AppendLine("if ((port & 1) == 0) { Border = (byte)(value & 7); BeeperLevel = (value & 0x10) != 0; return; }");
             sb.AppendLine("if (port == 0x1FFD) { Port1FFD = value; return; }");
             sb.AppendLine("if (port == 0x7FFD || (port & 0x8002) == 0) { if (!PagingDisabled) Port7FFD = value; if ((value & 0x20) != 0) PagingDisabled = true; return; }");
@@ -3632,8 +3644,10 @@ namespace ZX2ILRecomp
             sb.AppendLine("};");
             sb.AppendLine("_timer.Start();");
             sb.AppendLine("KeyPreview = true;");
-            sb.AppendLine("KeyDown += delegate(object s, KeyEventArgs ke) { SetKey(ke.KeyCode, true); ke.SuppressKeyPress = true; };");
-            sb.AppendLine("KeyUp += delegate(object s, KeyEventArgs ke) { SetKey(ke.KeyCode, false); };");
+            sb.AppendLine("KeyDown += delegate(object s, KeyEventArgs ke) { Runtime.LastKey = (int)ke.KeyCode; SetKey(ke.KeyCode, true); ke.SuppressKeyPress = true; };");
+            sb.AppendLine("KeyUp += delegate(object s, KeyEventArgs ke) { Runtime.LastKey = -1; SetKey(ke.KeyCode, false); };");
+            sb.AppendLine("this.Load += delegate(object s, EventArgs e) { this.Activate(); this.Focus(); };");
+            sb.AppendLine("this.GotFocus += delegate(object s, EventArgs e) { this.Focus(); };");
             sb.AppendLine("}");
 
             sb.AppendLine("protected override void OnPaint(PaintEventArgs e)");
@@ -3642,9 +3656,12 @@ namespace ZX2ILRecomp
             sb.AppendLine("if (_back != null) e.Graphics.DrawImageUnscaled(_back, 0, 0);");
             sb.AppendLine("string line1 = string.Format(\"F:{0} I:{1} PC:{2:X4} T:{3}\", Ula.FrameCount, Runtime.InsCount, Runtime.LastPC, Runtime.TrapCount);");
             sb.AppendLine("string line2 = string.Format(\"CPU:{0} A:{1:X2} F:{2:X2} SP:{3:X4} IM:{4}\", Runtime.CpuState, Runtime.A, Runtime.F, Runtime.SP, Runtime.IM);");
-            sb.AppendLine("e.Graphics.FillRectangle(Brushes.Black, 0, 0, 320, 32);");
+            // Диагностика ввода: Key=код последней клавиши в окне; port=что опросил CPU; rd=что прочитал; m7=строка SPACE.
+            sb.AppendLine("string line3 = string.Format(\"Key:{0} port:{1:X4} rd:{2:X2} m7:{3:X2} m0:{4:X2}\", Runtime.LastKey, Runtime.LastKeyPort, Runtime.LastKeyRead, Runtime.KeyMatrix[7], Runtime.KeyMatrix[0]);");
+            sb.AppendLine("e.Graphics.FillRectangle(Brushes.Black, 0, 0, 320, 48);");
             sb.AppendLine("e.Graphics.DrawString(line1, SystemFonts.DefaultFont, Brushes.Yellow, 2, 2);");
             sb.AppendLine("e.Graphics.DrawString(line2, SystemFonts.DefaultFont, Brushes.Yellow, 2, 16);");
+            sb.AppendLine("e.Graphics.DrawString(line3, SystemFonts.DefaultFont, Brushes.Lime, 2, 30);");
             sb.AppendLine("if (!string.IsNullOrEmpty(Runtime.LastError))");
             sb.AppendLine("{");
             sb.AppendLine("string msg = Runtime.LastError;");
