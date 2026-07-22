@@ -4,7 +4,13 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net48</TargetFramework>
 	<UseWindowsForms>true</UseWindowsForms>
+	<StartupObject>ZX2ILRecomp.Program</StartupObject>
+	<ApplicationIcon>disk.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="disk.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <Reference Include="System.Windows.Forms" />
