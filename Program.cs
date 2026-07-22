@@ -1194,6 +1194,18 @@ namespace ZX2ILRecomp
                 snap.H,
                 snap.L));
 
+            if (_opts.Model == 48 || _opts.Model == 128)
+                snap.Model = _opts.Model;
+
+            // НЕТ ROM в снапшоте -> ставим обработчик прерываний, иначе зависание после 1-го HALT.
+            if (!snap.HasRomCode)
+            {
+                snap.InstallMinimalRom();
+                Log.Info("No ROM in snapshot; installed minimal IM1 pseudo-ROM (FRAMES++ @0038).");
+            }
+
+            Log.Info(string.Format("")); // WTF why empty here
+
             DisassemblerZ80 dis = new DisassemblerZ80(snap);
 
             string dynamicTargetsPath = Path.Combine(workDir, "dynamic_targets.txt");
@@ -1848,6 +1860,36 @@ namespace ZX2ILRecomp
             Array.Copy(ram48, 0, RamBanks[5], 0, 16384);
             Array.Copy(ram48, 16384, RamBanks[2], 0, 16384);
             Array.Copy(ram48, 32768, RamBanks[0], 0, 16384);
+        }
+
+        public void InstallMinimalRom()
+        {
+            // Снапшоты .z80/.sna/.tap не содержат ROM, а игры ждут рабочий код
+            // по векторам прерываний (иначе после первого HALT CPU уезжает в NOP-зону).
+            // Ставим минимальный псевдо-ROM: RST-векторы = RET, IM1 = обработчик кадра.
+            // Остальное оставляем как есть (нули) — Elite использует свой шрифт, не ROM.
+            Rom0[0x00] = 0xC9; // RST 00
+            Rom0[0x08] = 0xC9; // RST 08
+            Rom0[0x10] = 0xC9; // RST 10
+            Rom0[0x18] = 0xC9; // RST 18
+            Rom0[0x20] = 0xC9; // RST 20
+            Rom0[0x28] = 0xC9; // RST 28
+            Rom0[0x30] = 0xC9; // RST 30
+                               // IM1 handler @0x0038: сохранить AF,HL; FRAMES(5C78)++; восстановить; RET.
+                               // Не трогаем alt-регистры и не делаем EI (игры сами делают EI перед HALT).
+            byte[] im1 = new byte[]
+            {
+        0xF5,             // PUSH AF
+        0xE5,             // PUSH HL
+        0x2A, 0x78, 0x5C, // LD HL,(5C78)
+        0x23,             // INC HL
+        0x22, 0x78, 0x5C, // LD (5C78),HL
+        0xE1,             // POP HL
+        0xF1,             // POP AF
+        0xC9              // RET
+            };
+            Array.Copy(im1, 0, Rom0, 0x38, im1.Length);
+            HasRomCode = true; // чтобы дисассемблер enqueue-нул векторы и скомпилировал их
         }
 
         void SetFlatRam(byte[] flat)
@@ -3655,7 +3697,7 @@ namespace ZX2ILRecomp
             sb.AppendLine("base.OnPaint(e);");
             sb.AppendLine("if (_back != null) e.Graphics.DrawImageUnscaled(_back, 0, 0);");
             sb.AppendLine("string line1 = string.Format(\"F:{0} I:{1} PC:{2:X4} T:{3}\", Ula.FrameCount, Runtime.InsCount, Runtime.LastPC, Runtime.TrapCount);");
-            sb.AppendLine("string line2 = string.Format(\"CPU:{0} A:{1:X2} F:{2:X2} SP:{3:X4} IM:{4}\", Runtime.CpuState, Runtime.A, Runtime.F, Runtime.SP, Runtime.IM);");
+            sb.AppendLine("string line2 = string.Format(\"CPU:{0} A:{1:X2} F:{2:X2} SP:{3:X4} IM:{4} IFF1:{5} I:{6:X2}\", Runtime.CpuState, Runtime.A, Runtime.F, Runtime.SP, Runtime.IM, Runtime.IFF1 ? 1 : 0, Runtime.I);");
             // Диагностика ввода: Key=код последней клавиши в окне; port=что опросил CPU; rd=что прочитал; m7=строка SPACE.
             sb.AppendLine("string line3 = string.Format(\"Key:{0} port:{1:X4} rd:{2:X2} m7:{3:X2} m0:{4:X2}\", Runtime.LastKey, Runtime.LastKeyPort, Runtime.LastKeyRead, Runtime.KeyMatrix[7], Runtime.KeyMatrix[0]);");
             sb.AppendLine("e.Graphics.FillRectangle(Brushes.Black, 0, 0, 320, 48);");
