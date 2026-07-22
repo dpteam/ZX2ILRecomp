@@ -1164,6 +1164,30 @@ namespace ZX2ILRecomp
             if (_opts.Model == 48 || _opts.Model == 128)
                 snap.Model = _opts.Model;
 
+            // Автозагрузка настоящего ROM 48K, если снапшот его не несёт. ROM критичен:
+            // RST/прерывания/системные вызовы игр идут через ROM. Без него даже валидный
+            // снапшот упрётся в RET-заглушки. (TAP/TZX это НЕ спасёт — это ленты, не снапшоты.)
+            if (ZxSnapshot.AllZero(snap.Rom0) && ZxSnapshot.AllZero(snap.Rom1))
+            {
+                string romPath = ZxSnapshot.TryFindRom(file);
+                if (romPath != null)
+                {
+                    try
+                    {
+                        byte[] rom = File.ReadAllBytes(romPath);
+                        if (rom.Length >= 16384)
+                        {
+                            Array.Copy(rom, 0, snap.Rom0, 0, 16384);
+                            snap.HasRomCode = true; // InstallMinimalRom ниже НЕ вызовется — не затрём ROM
+                            Log.Info("Loaded real 48K ROM: " + romPath);
+                        }
+                        else Log.Warn("ROM file too small (<16384): " + romPath);
+                    }
+                    catch (Exception ex) { Log.Warn("Failed to load ROM: " + ex.Message); }
+                }
+                else Log.Info("No 48.rom found nearby; using pseudo-ROM stub (ROM-dependent games may hang).");
+            }
+
             // 2) Эвристика SP: 0x0000 в 48K невалиден (ROM-зона, туда стек не пишут).
             if (snap.Model == 48 && snap.SP == 0x0000)
             {
@@ -1171,13 +1195,17 @@ namespace ZX2ILRecomp
                 snap.SP = 0xFFFF;
             }
 
-            // 3) Точка входа НЕ может лежать в ROM (<0x4000): ни пустой, ни псевдо-ROM
-            //    не содержат код игры. Форсим RAM-вход НЕЗАВИСИМО от HasRomCode.
-            //    (У Elite PC=0xFFF7 — это валидная RAM, сюда НЕ заходим, стартуем как есть.)
-            if (snap.PC < 0x4000)
+            // 3) Форс точки входа нужен ТОЛЬКО когда ROM НЕ загружен: тогда в ROM-зоне
+            //    лежат нули/псевдо-ROM и стартовать оттуда нельзя.
+            //    НО если реальный ROM подгружен (HasRomCode=true после TryFindRom) —
+            //    PC в ROM ЛЕГАЛЕН: в момент снимка CPU мог быть внутри ROM-вызова,
+            //    и старт с этого PC + RET по валидному стеку вернёт управление игре.
+            //    Форсить тут 0x8000 = сломать валидный дамп (как было с Manic Miner:
+            //    исходный PC=0x1F3E -> форс 0x8000 -> уезд в ROM MAIN-цикл 0x166B).
+            if (snap.PC < 0x4000 && !snap.HasRomCode)
             {
                 Log.Warn(string.Format(
-                    "PC=0x{0:X4} is in ROM zone; forcing entry to 0x8000 (no real ROM to resume from).",
+                    "PC=0x{0:X4} is in ROM zone and no real ROM loaded; forcing entry to 0x8000.",
                     snap.PC));
                 snap.PC = 0x8000;
                 snap.Entry = 0x8000;
@@ -2019,7 +2047,20 @@ namespace ZX2ILRecomp
             return m;
         }
 
-        static bool AllZero(byte[] data)
+        public static string TryFindRom(string inputFile)
+        {
+            string[] names = new string[] { "48.rom", "zx48.rom", "48k.rom", "spectrum.rom", "zx_spectrum_48.rom", "48K.ROM" };
+            List<string> dirs = new List<string>();
+            try { dirs.Add(AppDomain.CurrentDomain.BaseDirectory); } catch { }
+            try { dirs.Add(Environment.CurrentDirectory); } catch { }
+            try { string d = Path.GetDirectoryName(Path.GetFullPath(inputFile)); if (!string.IsNullOrEmpty(d) && !dirs.Contains(d)) dirs.Add(d); } catch { }
+            foreach (string d in dirs)
+                foreach (string n in names)
+                { try { string p = Path.Combine(d, n); if (File.Exists(p)) return p; } catch { } }
+            return null;
+        }
+
+        public static bool AllZero(byte[] data)
         {
             if (data == null) return true;
             for (int i = 0; i < data.Length; i++)
@@ -3875,7 +3916,7 @@ namespace ZX2ILRecomp
             sb.AppendLine("string line1 = string.Format(\"F:{0} I:{1} PC:{2:X4} T:{3}\", Ula.FrameCount, Runtime.InsCount, Runtime.LastPC, Runtime.TrapCount);");
             sb.AppendLine("string line2 = string.Format(\"CPU:{0} A:{1:X2} F:{2:X2} SP:{3:X4} IM:{4} IFF1:{5} I:{6:X2}\", Runtime.CpuState, Runtime.A, Runtime.F, Runtime.SP, Runtime.IM, Runtime.IFF1 ? 1 : 0, Runtime.I);");
             // Диагностика ввода: Key=код последней клавиши в окне; port=что опросил CPU; rd=что прочитал; m7=строка SPACE.
-            sb.AppendLine("string line3 = string.Format(\"Key:{0} port:{1:X4} rd:{2:X2} m7:{3:X2} m0:{4:X2}\", Runtime.LastKey, Runtime.LastKeyPort, Runtime.LastKeyRead, Runtime.KeyMatrix[7], Runtime.KeyMatrix[0]);");
+            sb.AppendLine("string line3 = string.Format(\"Key:{0} port:{1:X4} rd:{2:X2} m7:{3:X2} m0:{4:X2} op:{5:X2}/{6:X2}\", Runtime.LastKey, Runtime.LastKeyPort, Runtime.LastKeyRead, Runtime.KeyMatrix[7], Runtime.KeyMatrix[0], Memory.Read(Runtime.LastPC), Memory.Read((ushort)(Runtime.LastPC + 1)));");
             sb.AppendLine("e.Graphics.FillRectangle(Brushes.Black, 0, 0, 320, 48);");
             sb.AppendLine("e.Graphics.DrawString(line1, SystemFonts.DefaultFont, Brushes.Yellow, 2, 2);");
             sb.AppendLine("e.Graphics.DrawString(line2, SystemFonts.DefaultFont, Brushes.Yellow, 2, 16);");
