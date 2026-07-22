@@ -2119,52 +2119,61 @@ namespace ZX2ILRecomp
         public static byte[] BaseLen = new byte[256];
         public static byte[] EDLen = new byte[256];
         public static byte[] UsesIXYDisp = new byte[256];
-
-        static CpuZ80()
-        {
-            Init();
-        }
-
+        public static byte[] BaseT = new byte[256];
+        public static byte[] CBT = new byte[256];
+        public static byte[] EDT = new byte[256];
+        public static byte[] PFT = new byte[256];
+        public static byte[] DDCBT = new byte[256];
+        static CpuZ80() { Init(); }
         static void Init()
         {
             int i;
-            for (i = 0; i < 256; i++)
-            {
-                BaseLen[i] = 1;
-                EDLen[i] = 2;
-            }
-
-            byte[] len3 = new byte[]
-            {
-                0x01,0x11,0x21,0x31,0x22,0x2A,0x32,0x3A,
-                0xC2,0xC3,0xC4,0xCA,0xCC,0xCD,
-                0xD2,0xDA,0xDC,
-                0xE2,0xEA,0xEC,
-                0xF2,0xFA,0xFC
-            };
-
-            byte[] len2 = new byte[]
-            {
-                0x06,0x0E,0x16,0x1E,0x26,0x2E,0x36,0x3E,
-                0x10,0x18,0x20,0x28,0x30,0x38,
-                0xC6,0xCE,0xD3,0xD6,0xDB,0xDE,0xE6,0xEE,0xF6,0xFE
-            };
-
+            for (i = 0; i < 256; i++) { BaseLen[i] = 1; EDLen[i] = 2; UsesIXYDisp[i] = 0; BaseT[i] = 4; CBT[i] = 8; EDT[i] = 8; PFT[i] = 8; DDCBT[i] = 23; }
+            byte[] len3 = new byte[] { 0x01, 0x11, 0x21, 0x31, 0x22, 0x2A, 0x32, 0x3A, 0xC2, 0xC3, 0xC4, 0xCA, 0xCC, 0xCD, 0xD2, 0xDA, 0xDC, 0xE2, 0xEA, 0xEC, 0xF2, 0xFA, 0xFC };
+            byte[] len2 = new byte[] { 0x06, 0x0E, 0x16, 0x1E, 0x26, 0x2E, 0x36, 0x3E, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0xC6, 0xCE, 0xD3, 0xD6, 0xDB, 0xDE, 0xE6, 0xEE, 0xF6, 0xFE };
             foreach (byte op in len3) BaseLen[op] = 3;
             foreach (byte op in len2) BaseLen[op] = 2;
-
             byte[] ed4 = new byte[] { 0x43, 0x4B, 0x53, 0x5B, 0x63, 0x6B, 0x73, 0x7B };
             foreach (byte op in ed4) EDLen[op] = 4;
-
-            byte[] ixy = new byte[]
-            {
-                0x34,0x35,0x36,
-                0x46,0x4E,0x56,0x5E,0x66,0x6E,
-                0x70,0x71,0x72,0x73,0x74,0x75,0x77,0x7E,
-                0x86,0x8E,0x96,0x9E,0xA6,0xAE,0xB6,0xBE
-            };
-
+            byte[] ixy = new byte[] { 0x34, 0x35, 0x36, 0x46, 0x4E, 0x56, 0x5E, 0x66, 0x6E, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x77, 0x7E, 0x86, 0x8E, 0x96, 0x9E, 0xA6, 0xAE, 0xB6, 0xBE };
             foreach (byte op in ixy) UsesIXYDisp[op] = 1;
+            byte[] b7 = new byte[] { 0x46, 0x4E, 0x56, 0x5E, 0x66, 0x6E, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x77, 0x7E, 0x02, 0x0A, 0x12, 0x1A, 0x3A, 0x3E, 0x06, 0x0E, 0x16, 0x1E, 0x26, 0x2E, 0xC6, 0xCE, 0xD6, 0xDE, 0xE6, 0xEE, 0xF6, 0xFE };
+            foreach (byte op in b7) BaseT[op] = 7;
+            byte[] b10 = new byte[] { 0x01, 0x11, 0x21, 0x31, 0x36, 0xC2, 0xC3, 0xCA, 0xD2, 0xDA, 0xE2, 0xEA, 0xF2, 0xFA, 0x18, 0x20, 0x28, 0x30, 0x38, 0xC1, 0xD1, 0xE1, 0xF1, 0xC9, 0x32, 0x22, 0x2A };
+            foreach (byte op in b10) BaseT[op] = 10;
+            byte[] b11 = new byte[] { 0x09, 0x19, 0x29, 0x39, 0xC5, 0xD5, 0xE5, 0xF5, 0xC0, 0xC8, 0xD0, 0xD8, 0xE0, 0xE8, 0xF0, 0xF8, 0xC7, 0xCF, 0xD7, 0xDF, 0xE7, 0xEF, 0xF7, 0xFF, 0xD3, 0xDB, 0x34, 0x35 };
+            foreach (byte op in b11) BaseT[op] = 11;
+            byte[] b6 = new byte[] { 0x03, 0x0B, 0x13, 0x1B, 0x23, 0x2B, 0x33, 0x3B, 0xF9 };
+            foreach (byte op in b6) BaseT[op] = 6;
+            byte[] b12 = new byte[] { 0x10, 0x18, 0x20, 0x28, 0x30, 0x38 };
+            foreach (byte op in b12) BaseT[op] = 12;
+            byte[] b13 = new byte[] { 0x10, 0x32, 0x3A };
+            foreach (byte op in b13) BaseT[op] = 13;
+            BaseT[0x22] = 16; BaseT[0x2A] = 16;
+            byte[] b17 = new byte[] { 0xC4, 0xCC, 0xCD, 0xD4, 0xDC, 0xE4, 0xEC, 0xF4, 0xFC };
+            foreach (byte op in b17) BaseT[op] = 17;
+            BaseT[0xE3] = 19;
+            BaseT[0xCB] = 0; BaseT[0xDD] = 0; BaseT[0xED] = 0; BaseT[0xFD] = 0;
+            for (i = 0; i < 256; i++) { int kind = i >> 3; int reg = i & 7; if (kind < 8) CBT[i] = (reg == 6) ? (byte)16 : (byte)8; else if (kind < 16) CBT[i] = (reg == 6) ? (byte)12 : (byte)8; else CBT[i] = (reg == 6) ? (byte)15 : (byte)8; }
+            for (i = 0x40; i <= 0x7F; i++) { if ((i & 0xC7) == 0x40 || (i & 0xC7) == 0x41) EDT[i] = 12; }
+            EDT[0x47] = 9; EDT[0x4F] = 9; EDT[0x57] = 9; EDT[0x5F] = 9;
+            for (i = 0x45; i <= 0x7D; i += 8) EDT[i] = 14;
+            for (i = 0x42; i <= 0x72; i += 8) EDT[i] = 15;
+            for (i = 0x4A; i <= 0x7A; i += 8) EDT[i] = 15;
+            for (i = 0x43; i <= 0x73; i += 8) EDT[i] = 20;
+            for (i = 0x4B; i <= 0x7B; i += 8) EDT[i] = 20;
+            EDT[0x67] = 18; EDT[0x6F] = 18;
+            for (i = 0xA0; i <= 0xBF; i++) EDT[i] = 16;
+            for (i = 0; i < 256; i++) PFT[i] = (byte)(BaseT[i] + 4);
+            byte[] pf19 = new byte[] { 0x46, 0x4E, 0x56, 0x5E, 0x66, 0x6E, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x77, 0x7E, 0x86, 0x8E, 0x96, 0x9E, 0xA6, 0xAE, 0xB6, 0xBE, 0x36 };
+            foreach (byte op in pf19) PFT[op] = 19;
+            PFT[0x34] = 23; PFT[0x35] = 23;
+            PFT[0x21] = 14; PFT[0x22] = 20; PFT[0x2A] = 20; PFT[0x23] = 10; PFT[0x2B] = 10;
+            PFT[0x24] = 8; PFT[0x25] = 8; PFT[0x26] = 11; PFT[0x2C] = 8; PFT[0x2D] = 8; PFT[0x2E] = 11;
+            PFT[0xE1] = 14; PFT[0xE5] = 15; PFT[0xE3] = 23; PFT[0xF9] = 10; PFT[0xE9] = 8;
+            byte[] pf15 = new byte[] { 0x09, 0x19, 0x29, 0x39 };
+            foreach (byte op in pf15) PFT[op] = 15;
+            for (i = 0; i < 256; i++) { int k = i >> 3; DDCBT[i] = (k >= 8 && k < 16) ? (byte)20 : (byte)23; }
         }
     }
 
@@ -2703,6 +2712,10 @@ namespace ZX2ILRecomp
             sb.AppendLine("public static object FrameLock = new object();");
             sb.AppendLine("public static long ClockStart = System.Diagnostics.Stopwatch.GetTimestamp();");
             sb.AppendLine("public static volatile bool ThrottleEnabled = true;");
+            sb.AppendLine("public static long TStates;");
+            sb.AppendLine("public static long NextIntT = 69888;");
+            sb.AppendLine("public static double Speed = 1.0;");
+            sb.AppendLine("[System.Runtime.InteropServices.DllImport(\"winmm.dll\")] static extern int TimeBeginPeriod(int period);");
             sb.AppendLine("public static int[] PcHist = new int[65536];");
             sb.AppendLine("public static int PcHistAccum;");
 
@@ -2741,6 +2754,8 @@ namespace ZX2ILRecomp
             sb.AppendLine("Memory.Reset();");
             sb.AppendLine("Ula.Reset();");
             sb.AppendLine("Audio.TryStart();");
+            sb.AppendLine("try { TimeBeginPeriod(1); } catch { }");
+            sb.AppendLine("NextIntT = 69888;");
             sb.AppendLine("}");
 
             sb.AppendLine("public static void InitParity()");
@@ -2762,6 +2777,7 @@ namespace ZX2ILRecomp
             sb.AppendLine("public static void Reset()");
             sb.AppendLine("{");
             sb.AppendLine("LastError = null; LastTrap = null; InsCount = 0; LastPC = 0; TrapCount = 0; DispatchTarget = PC; CpuState = \"Reset\";");
+            sb.AppendLine("TStates = 0; NextIntT = 69888; ClockStart = System.Diagnostics.Stopwatch.GetTimestamp();");
             sb.AppendLine("if (SeenDynamic != null) SeenDynamic.Clear();");
             sb.AppendLine("Memory.Reset();");
             sb.AppendLine("}");
@@ -2777,29 +2793,20 @@ namespace ZX2ILRecomp
 
         void AppendRuntimeTables(StringBuilder sb)
         {
-            sb.Append("public static readonly byte[] BaseLen = new byte[256]{");
-            for (int i = 0; i < 256; i++)
+            System.Action<string, byte[]> emit = delegate (string name, byte[] arr)
             {
-                if (i > 0) sb.Append(",");
-                sb.Append(CpuZ80.BaseLen[i].ToString(CultureInfo.InvariantCulture));
-            }
-            sb.AppendLine("};");
-
-            sb.Append("public static readonly byte[] EDLen = new byte[256]{");
-            for (int i = 0; i < 256; i++)
-            {
-                if (i > 0) sb.Append(",");
-                sb.Append(CpuZ80.EDLen[i].ToString(CultureInfo.InvariantCulture));
-            }
-            sb.AppendLine("};");
-
-            sb.Append("public static readonly byte[] UsesIXYDisp = new byte[256]{");
-            for (int i = 0; i < 256; i++)
-            {
-                if (i > 0) sb.Append(",");
-                sb.Append(CpuZ80.UsesIXYDisp[i].ToString(CultureInfo.InvariantCulture));
-            }
-            sb.AppendLine("};");
+                sb.Append("public static readonly byte[] " + name + " = new byte[256]{");
+                for (int i = 0; i < 256; i++) { if (i > 0) sb.Append(","); sb.Append(arr[i].ToString(CultureInfo.InvariantCulture)); }
+                sb.AppendLine("};");
+            };
+            emit("BaseLen", CpuZ80.BaseLen);
+            emit("EDLen", CpuZ80.EDLen);
+            emit("UsesIXYDisp", CpuZ80.UsesIXYDisp);
+            emit("BaseT", CpuZ80.BaseT);
+            emit("CBT", CpuZ80.CBT);
+            emit("EDT", CpuZ80.EDT);
+            emit("PFT", CpuZ80.PFT);
+            emit("DDCBT", CpuZ80.DDCBT);
         }
 
         void AppendInitMemory(StringBuilder sb)
@@ -3245,18 +3252,14 @@ namespace ZX2ILRecomp
             sb.AppendLine("public static void Throttle()");
             sb.AppendLine("{");
             sb.AppendLine("if (!ThrottleEnabled) return;");
+            sb.AppendLine("if (Speed <= 0.0) return;");
             sb.AppendLine("long freq = System.Diagnostics.Stopwatch.Frequency;");
             sb.AppendLine("long now = System.Diagnostics.Stopwatch.GetTimestamp();");
-            sb.AppendLine("long ahead = InsCount - (now - ClockStart) * 3500000L / freq;");
-            sb.AppendLine("if (ahead < -100000) { ClockStart = System.Diagnostics.Stopwatch.GetTimestamp(); return; }");
-            sb.AppendLine("if (ahead <= 50000) return;");
-            sb.AppendLine("for (int k = 0; k < 4; k++)");
-            sb.AppendLine("{");
-            sb.AppendLine("Thread.Sleep(1);");
-            sb.AppendLine("long n2 = System.Diagnostics.Stopwatch.GetTimestamp();");
-            sb.AppendLine("if (InsCount - (n2 - ClockStart) * 3500000L / freq <= 50000) return;");
-            sb.AppendLine("}");
-            sb.AppendLine("ClockStart = System.Diagnostics.Stopwatch.GetTimestamp();");
+            sb.AppendLine("long target = (long)(3500000.0 * Speed);");
+            sb.AppendLine("long ahead = TStates - (now - ClockStart) * target / freq;");
+            sb.AppendLine("if (ahead < -target) { ClockStart = System.Diagnostics.Stopwatch.GetTimestamp(); return; }");
+            sb.AppendLine("while (ahead > target / 100) { System.Threading.Thread.Sleep(1); now = System.Diagnostics.Stopwatch.GetTimestamp(); ahead = TStates - (now - ClockStart) * target / freq; }");
+            sb.AppendLine("while (ahead > 0) { now = System.Diagnostics.Stopwatch.GetTimestamp(); ahead = TStates - (now - ClockStart) * target / freq; }");
             sb.AppendLine("}");
 
             sb.AppendLine("public static void DumpPcHist()");
@@ -3278,8 +3281,8 @@ namespace ZX2ILRecomp
 
             sb.AppendLine("public static bool CheckInterrupt(ushort pc)");
             sb.AppendLine("{");
+            sb.AppendLine("if (TStates >= NextIntT) { NextIntT += 69888; InterruptPending = true; }");
             sb.AppendLine("if ((InsCount & 4095) == 0) Throttle();");
-            sb.AppendLine("PcHist[pc]++; PcHistAccum++; if ((PcHistAccum & 0x1FFFFF) == 0) DumpPcHist();");
             sb.AppendLine("if (!InterruptPending || !IFF1) return false;");
             sb.AppendLine("InterruptPending = false;");
             sb.AppendLine("Halted = false;");
@@ -3293,7 +3296,15 @@ namespace ZX2ILRecomp
             sb.AppendLine("public static void Halt()");
             sb.AppendLine("{");
             sb.AppendLine("Halted = true;");
-            sb.AppendLine("while (Halted && !InterruptPending) { Throttle(); Thread.Sleep(1); }");
+            sb.AppendLine("long freq = System.Diagnostics.Stopwatch.Frequency;");
+            sb.AppendLine("while (Halted && !InterruptPending)");
+            sb.AppendLine("{");
+            sb.AppendLine("long now = System.Diagnostics.Stopwatch.GetTimestamp();");
+            sb.AppendLine("long wallT = (now - ClockStart) * (long)(3500000.0 * Speed) / freq;");
+            sb.AppendLine("if (wallT > TStates) TStates = wallT;");
+            sb.AppendLine("if (TStates >= NextIntT) { NextIntT += 69888; InterruptPending = true; }");
+            sb.AppendLine("else System.Threading.Thread.Sleep(1);");
+            sb.AppendLine("}");
             sb.AppendLine("Halted = false;");
             sb.AppendLine("}");
 
@@ -3337,6 +3348,7 @@ namespace ZX2ILRecomp
         {
             sb.AppendLine("public static void ExecBase(byte op, ushort val)");
             sb.AppendLine("{");
+            sb.AppendLine("TStates += BaseT[op];");
             sb.AppendLine("byte n = (byte)val;");
             sb.AppendLine("switch (op)");
             sb.AppendLine("{");
@@ -3388,6 +3400,7 @@ namespace ZX2ILRecomp
 
             sb.AppendLine("public static void ExecCB(byte op)");
             sb.AppendLine("{");
+            sb.AppendLine("TStates += CBT[op];");
             sb.AppendLine("int reg = op & 7; int kind = op >> 3;");
             sb.AppendLine("if (kind < 8) { byte v = GetR8(reg); v = RotateCB(kind, v); SetR8(reg, v); return; }");
             sb.AppendLine("if (kind < 16) { byte v = GetR8(reg); BitValue(v, kind - 8); return; }");
@@ -3397,6 +3410,7 @@ namespace ZX2ILRecomp
 
             sb.AppendLine("public static void ExecEDNormal(byte op, ushort val)");
             sb.AppendLine("{");
+            sb.AppendLine("TStates += EDT[op];");
             sb.AppendLine("if ((op & 0xC7) == 0x40) { int r = (op >> 3) & 7; byte v = ReadPort(BC); if (r != 6) SetR8(r, v); F = (byte)((F & 1) | (v == 0 ? 0x40 : 0) | (v & 0x80) | Parity[v]); return; }");
             sb.AppendLine("if ((op & 0xC7) == 0x41) { int r = (op >> 3) & 7; WritePort(BC, (r == 6) ? (byte)0 : GetR8(r)); return; }");
             sb.AppendLine("if ((op & 0xCF) == 0x42) { Sbc16HL(GetRP16Arith((op >> 4) & 3)); return; }");
@@ -3421,32 +3435,32 @@ namespace ZX2ILRecomp
             sb.AppendLine("switch (op)");
             sb.AppendLine("{");
             sb.AppendLine("case 0xA0: Ldi(); break;");
-            sb.AppendLine("case 0xB0: while (BC != 0) Ldi(); break;");
+            sb.AppendLine("case 0xB0: while (BC != 0) { Ldi(); TStates += 5; } break;");
             sb.AppendLine("case 0xA8: Ldd(); break;");
-            sb.AppendLine("case 0xB8: while (BC != 0) Ldd(); break;");
+            sb.AppendLine("case 0xB8: while (BC != 0) { Ldd(); TStates += 5; } break;");
             sb.AppendLine("case 0xA1: Cpi(); break;");
-            sb.AppendLine("case 0xB1: while (BC != 0) { Cpi(); if ((F & 0x40) == 0) break; } break;");
+            sb.AppendLine("case 0xB1: while (BC != 0) { Cpi(); TStates += 5; if ((F & 0x40) == 0) break; } break;");
             sb.AppendLine("case 0xA9: Cpd(); break;");
-            sb.AppendLine("case 0xB9: while (BC != 0) { Cpd(); if ((F & 0x40) == 0) break; } break;");
+            sb.AppendLine("case 0xB9: while (BC != 0) { Cpd(); TStates += 5; if ((F & 0x40) == 0) break; } break;");
             sb.AppendLine("case 0xA2: Ini(); break;");
-            sb.AppendLine("case 0xB2: while (B != 0) Ini(); break;");
+            sb.AppendLine("case 0xB2: while (B != 0) { Ini(); TStates += 5; } break;");
             sb.AppendLine("case 0xAA: Ind(); break;");
-            sb.AppendLine("case 0xBA: while (B != 0) Ind(); break;");
+            sb.AppendLine("case 0xBA: while (B != 0) { Ind(); TStates += 5; } break;");
             sb.AppendLine("case 0xA3: Outi(); break;");
-            sb.AppendLine("case 0xB3: while (B != 0) Outi(); break;");
+            sb.AppendLine("case 0xB3: while (B != 0) { Outi(); TStates += 5; } break;");
             sb.AppendLine("case 0xAB: Outd(); break;");
-            sb.AppendLine("case 0xBB: while (B != 0) Outd(); break;");
+            sb.AppendLine("case 0xBB: while (B != 0) { Outd(); TStates += 5; } break;");
             sb.AppendLine("}");
             sb.AppendLine("}");
 
-            sb.AppendLine("static void Ldi() { byte v = Memory.Read(HL); Memory.Write(DE, v); HL = (ushort)(HL + 1); DE = (ushort)(DE + 1); BC = (ushort)(BC - 1); F = (byte)((F & 0xC1) | ((BC != 0) ? 0x04 : 0)); }");
-            sb.AppendLine("static void Ldd() { byte v = Memory.Read(HL); Memory.Write(DE, v); HL = (ushort)(HL - 1); DE = (ushort)(DE - 1); BC = (ushort)(BC - 1); F = (byte)((F & 0xC1) | ((BC != 0) ? 0x04 : 0)); }");
-            sb.AppendLine("static void Cpi() { byte v = Memory.Read(HL); int res = A - v; HL = (ushort)(HL + 1); BC = (ushort)(BC - 1); F = (byte)((F & 0x01) | ((byte)res == 0 ? 0x40 : 0) | ((byte)res & 0x80) | ((BC != 0) ? 0x04 : 0) | 0x02); }");
-            sb.AppendLine("static void Cpd() { byte v = Memory.Read(HL); int res = A - v; HL = (ushort)(HL - 1); BC = (ushort)(BC - 1); F = (byte)((F & 0x01) | ((byte)res == 0 ? 0x40 : 0) | ((byte)res & 0x80) | ((BC != 0) ? 0x04 : 0) | 0x02); }");
-            sb.AppendLine("static void Ini() { byte v = ReadPort(BC); Memory.Write(HL, v); HL = (ushort)(HL + 1); B--; SetSZ(B); F = (byte)((F & 1) | 0x02); }");
-            sb.AppendLine("static void Ind() { byte v = ReadPort(BC); Memory.Write(HL, v); HL = (ushort)(HL - 1); B--; SetSZ(B); F = (byte)((F & 1) | 0x02); }");
-            sb.AppendLine("static void Outi() { byte v = Memory.Read(HL); HL = (ushort)(HL + 1); B--; WritePort(BC, v); SetSZ(B); }");
-            sb.AppendLine("static void Outd() { byte v = Memory.Read(HL); HL = (ushort)(HL - 1); B--; WritePort(BC, v); SetSZ(B); }");
+            sb.AppendLine("static void Ldi() { TStates += 16; byte v = Memory.Read(HL); Memory.Write(DE, v); HL = (ushort)(HL + 1); DE = (ushort)(DE + 1); BC = (ushort)(BC - 1); F = (byte)((F & 0xC1) | ((BC != 0) ? 0x04 : 0)); }");
+            sb.AppendLine("static void Ldd() { TStates += 16; byte v = Memory.Read(HL); Memory.Write(DE, v); HL = (ushort)(HL - 1); DE = (ushort)(DE - 1); BC = (ushort)(BC - 1); F = (byte)((F & 0xC1) | ((BC != 0) ? 0x04 : 0)); }");
+            sb.AppendLine("static void Cpi() { TStates += 16; byte v = Memory.Read(HL); int res = A - v; HL = (ushort)(HL + 1); BC = (ushort)(BC - 1); F = (byte)((F & 0x01) | ((byte)res == 0 ? 0x40 : 0) | ((byte)res & 0x80) | ((BC != 0) ? 0x04 : 0) | 0x02); }");
+            sb.AppendLine("static void Cpd() { TStates += 16; byte v = Memory.Read(HL); int res = A - v; HL = (ushort)(HL - 1); BC = (ushort)(BC - 1); F = (byte)((F & 0x01) | ((byte)res == 0 ? 0x40 : 0) | ((byte)res & 0x80) | ((BC != 0) ? 0x04 : 0) | 0x02); }");
+            sb.AppendLine("static void Ini() { TStates += 16; byte v = ReadPort(BC); Memory.Write(HL, v); HL = (ushort)(HL + 1); B--; SetSZ(B); F = (byte)((F & 1) | 0x02); }");
+            sb.AppendLine("static void Ind() { TStates += 16; byte v = ReadPort(BC); Memory.Write(HL, v); HL = (ushort)(HL - 1); B--; SetSZ(B); F = (byte)((F & 1) | 0x02); }");
+            sb.AppendLine("static void Outi() { TStates += 16; byte v = Memory.Read(HL); HL = (ushort)(HL + 1); B--; WritePort(BC, v); SetSZ(B); }");
+            sb.AppendLine("static void Outd() { TStates += 16; byte v = Memory.Read(HL); HL = (ushort)(HL - 1); B--; WritePort(BC, v); SetSZ(B); }");
 
             sb.AppendLine("public static byte GetIXH(bool isIX) { return (byte)((isIX ? IX : IY) >> 8); }");
             sb.AppendLine("public static byte GetIXL(bool isIX) { return (byte)((isIX ? IX : IY) & 0xFF); }");
@@ -3455,6 +3469,7 @@ namespace ZX2ILRecomp
 
             sb.AppendLine("public static void ExecPrefixed(int prefix, byte op, sbyte d, ushort val)");
             sb.AppendLine("{");
+            sb.AppendLine("TStates += PFT[op];");
             sb.AppendLine("bool isIX = prefix == 0xDD;");
             sb.AppendLine("byte n = (byte)val;");
 
@@ -3495,6 +3510,7 @@ namespace ZX2ILRecomp
 
             sb.AppendLine("public static void ExecPrefixedCB(int prefix, sbyte d, byte op)");
             sb.AppendLine("{");
+            sb.AppendLine("TStates += DDCBT[op];");
             sb.AppendLine("bool isIX = prefix == 0xDD || prefix == 0xDDCB;");
             sb.AppendLine("ushort addr = (ushort)((isIX ? IX : IY) + d);");
             sb.AppendLine("int kind = op >> 3; int reg = op & 7;");
@@ -3522,35 +3538,25 @@ namespace ZX2ILRecomp
             sb.AppendLine("}");
             sb.AppendLine("return BaseLen[op];");
             sb.AppendLine("}");
-
             sb.AppendLine("public static bool ExecDynamicOne(ushort pc)");
             sb.AppendLine("{");
             sb.AppendLine("byte op = Memory.Read(pc);");
-
             sb.AppendLine("if (op == 0xCB) { ExecCB(Memory.Read((ushort)(pc + 1))); DispatchTarget = (ushort)(pc + 2); return true; }");
-
             sb.AppendLine("if (op == 0xED)");
             sb.AppendLine("{");
             sb.AppendLine("byte ed = Memory.Read((ushort)(pc + 1));");
             sb.AppendLine("int len = EDLen[ed];");
             sb.AppendLine("ushort nn = len == 4 ? Memory.Read16((ushort)(pc + 2)) : (ushort)0;");
-            sb.AppendLine("if ((ed & 0xC7) == 0x45) { DispatchTarget = Pop16(); IFF1 = IFF2; return true; }");
+            sb.AppendLine("if ((ed & 0xC7) == 0x45) { TStates += 14; DispatchTarget = Pop16(); IFF1 = IFF2; return true; }");
             sb.AppendLine("ExecEDNormal(ed, nn);");
             sb.AppendLine("DispatchTarget = (ushort)(pc + len);");
             sb.AppendLine("return true;");
             sb.AppendLine("}");
-
             sb.AppendLine("if (op == 0xDD || op == 0xFD)");
             sb.AppendLine("{");
             sb.AppendLine("byte op2 = Memory.Read((ushort)(pc + 1));");
             sb.AppendLine("if (op2 == 0xCB) { sbyte d = (sbyte)Memory.Read((ushort)(pc + 2)); byte cb = Memory.Read((ushort)(pc + 3)); ExecPrefixedCB(op, d, cb); DispatchTarget = (ushort)(pc + 4); return true; }");
-            sb.AppendLine("if (op2 == 0xE9) { ushort ixy = (op == 0xDD) ? IX : IY; Runtime.NoteDynamicTarget(ixy); DispatchTarget = ixy; return true; }");
-            // Префикс DD/FD применим к op2? Если НЕТ — по спеке Z80 префикс игнорируется,
-            // и выполняется базовая инструкция, физически лежащая по pc+1 (она сама корректно
-            // выставит DispatchTarget, в т.ч. для JP/JR/CALL/RET/HALT). Без этого DD 99 и т.п.
-            // падали в UnknownOpcode (краш Elite .tap на $BE53).
-            sb.AppendLine("bool ixApplicable = (op2==0x21||op2==0x22||op2==0x2A||op2==0x23||op2==0x2B||op2==0x24||op2==0x25||op2==0x26||op2==0x2C||op2==0x2D||op2==0x2E||op2==0xE1||op2==0xE5||op2==0xE3||op2==0xF9) || ((op2 & 0xCF) == 0x09) || (UsesIXYDisp[op2] != 0);");
-            sb.AppendLine("if (!ixApplicable) { return ExecDynamicOne((ushort)(pc + 1)); }");
+            sb.AppendLine("if (op2 == 0xE9) { TStates += 8; ushort ixy = (op == 0xDD) ? IX : IY; Runtime.NoteDynamicTarget(ixy); DispatchTarget = ixy; return true; }");
             sb.AppendLine("int len = GetLength(pc);");
             sb.AppendLine("sbyte d2 = 0; ushort nn2 = 0;");
             sb.AppendLine("if (UsesIXYDisp[op2] != 0) { d2 = (sbyte)Memory.Read((ushort)(pc + 2)); if (len == 4) nn2 = Memory.Read((ushort)(pc + 3)); }");
@@ -3559,32 +3565,29 @@ namespace ZX2ILRecomp
             sb.AppendLine("DispatchTarget = (ushort)(pc + len);");
             sb.AppendLine("return true;");
             sb.AppendLine("}");
-
             sb.AppendLine("int blen = BaseLen[op];");
             sb.AppendLine("ushort operand = blen >= 2 ? Memory.Read((ushort)(pc + 1)) : (ushort)0;");
             sb.AppendLine("if (blen == 3) operand |= (ushort)(Memory.Read((ushort)(pc + 2)) << 8);");
-
             sb.AppendLine("switch (op)");
             sb.AppendLine("{");
-            sb.AppendLine("case 0xC3: DispatchTarget = operand; return true;");
+            sb.AppendLine("case 0xC3: TStates += 10; DispatchTarget = operand; return true;");
             sb.AppendLine("case 0xC2: case 0xCA: case 0xD2: case 0xDA: case 0xE2: case 0xEA: case 0xF2: case 0xFA:");
-            sb.AppendLine("if (Conditional((op >> 3) & 7)) DispatchTarget = operand; else DispatchTarget = (ushort)(pc + 3); return true;");
-            sb.AppendLine("case 0x18: DispatchTarget = (ushort)(pc + 2 + (sbyte)operand); return true;");
-            sb.AppendLine("case 0x10: B = (byte)(B - 1); if (B != 0) DispatchTarget = (ushort)(pc + 2 + (sbyte)operand); else DispatchTarget = (ushort)(pc + 2); return true;");
+            sb.AppendLine("TStates += 10; if (Conditional((op >> 3) & 7)) DispatchTarget = operand; else DispatchTarget = (ushort)(pc + 3); return true;");
+            sb.AppendLine("case 0x18: TStates += 12; DispatchTarget = (ushort)(pc + 2 + (sbyte)operand); return true;");
+            sb.AppendLine("case 0x10: TStates += 13; B = (byte)(B - 1); if (B != 0) DispatchTarget = (ushort)(pc + 2 + (sbyte)operand); else DispatchTarget = (ushort)(pc + 2); return true;");
             sb.AppendLine("case 0x20: case 0x28: case 0x30: case 0x38:");
-            sb.AppendLine("if (Conditional((op >> 3) & 3)) DispatchTarget = (ushort)(pc + 2 + (sbyte)operand); else DispatchTarget = (ushort)(pc + 2); return true;");
-            sb.AppendLine("case 0xCD: Push16((ushort)(pc + 3)); DispatchTarget = operand; return true;");
+            sb.AppendLine("TStates += 12; if (Conditional((op >> 3) & 3)) DispatchTarget = (ushort)(pc + 2 + (sbyte)operand); else DispatchTarget = (ushort)(pc + 2); return true;");
+            sb.AppendLine("case 0xCD: TStates += 17; Push16((ushort)(pc + 3)); DispatchTarget = operand; return true;");
             sb.AppendLine("case 0xC4: case 0xCC: case 0xD4: case 0xDC: case 0xE4: case 0xEC: case 0xF4: case 0xFC:");
-            sb.AppendLine("if (Conditional((op >> 3) & 7)) { Push16((ushort)(pc + 3)); DispatchTarget = operand; } else DispatchTarget = (ushort)(pc + 3); return true;");
-            sb.AppendLine("case 0xC9: { ushort t = Pop16(); Runtime.NoteDynamicTarget(t); DispatchTarget = t; return true; }");
+            sb.AppendLine("TStates += 17; if (Conditional((op >> 3) & 7)) { Push16((ushort)(pc + 3)); DispatchTarget = operand; } else DispatchTarget = (ushort)(pc + 3); return true;");
+            sb.AppendLine("case 0xC9: TStates += 10; { ushort t = Pop16(); Runtime.NoteDynamicTarget(t); DispatchTarget = t; return true; }");
             sb.AppendLine("case 0xC0: case 0xC8: case 0xD0: case 0xD8: case 0xE0: case 0xE8: case 0xF0: case 0xF8:");
-            sb.AppendLine("if (Conditional((op >> 3) & 7)) DispatchTarget = Pop16(); else DispatchTarget = (ushort)(pc + 1); return true;");
+            sb.AppendLine("TStates += 11; if (Conditional((op >> 3) & 7)) DispatchTarget = Pop16(); else DispatchTarget = (ushort)(pc + 1); return true;");
             sb.AppendLine("case 0xC7: case 0xCF: case 0xD7: case 0xDF: case 0xE7: case 0xEF: case 0xF7: case 0xFF:");
-            sb.AppendLine("Push16((ushort)(pc + 1)); DispatchTarget = (ushort)(op & 0x38); return true;");
-            sb.AppendLine("case 0xE9: Runtime.NoteDynamicTarget(HL); DispatchTarget = HL; return true;");
-            sb.AppendLine("case 0x76: Halt(); DispatchTarget = (ushort)(pc + 1); return true;");
+            sb.AppendLine("TStates += 11; Push16((ushort)(pc + 1)); DispatchTarget = (ushort)(op & 0x38); return true;");
+            sb.AppendLine("case 0xE9: TStates += 4; Runtime.NoteDynamicTarget(HL); DispatchTarget = HL; return true;");
+            sb.AppendLine("case 0x76: TStates += 4; Halt(); DispatchTarget = (ushort)(pc + 1); return true;");
             sb.AppendLine("}");
-
             sb.AppendLine("ExecBase(op, operand);");
             sb.AppendLine("DispatchTarget = (ushort)(pc + blen);");
             sb.AppendLine("return true;");
@@ -3897,7 +3900,6 @@ namespace ZX2ILRecomp
             sb.AppendLine("_timer.Tick += delegate(object sender, EventArgs e)");
             sb.AppendLine("{");
             sb.AppendLine("Ula.FrameCount++;");
-            sb.AppendLine("Runtime.InterruptPending = true;");
             sb.AppendLine("Ula.RenderToBitmap(_back);");
             sb.AppendLine("Invalidate();");
             sb.AppendLine("};");
@@ -4033,6 +4035,7 @@ namespace ZX2ILRecomp
                     return;
 
                 case OpControlZ80.Halt:
+                    Line(sb, "Runtime.TStates += 4;");
                     Line(sb, "Runtime.Halt();");
                     if (inst.HasFallthrough)
                         EmitGoto(sb, inst.Fallthrough);
@@ -4064,31 +4067,32 @@ namespace ZX2ILRecomp
 
         void EmitBranch(StringBuilder sb, InstructionZ80 inst)
         {
+            Line(sb, "Runtime.TStates += " + CpuZ80.BaseT[inst.Opcode] + ";");
             if (inst.IsDJNZ)
             {
                 Line(sb, "Runtime.B = (byte)(Runtime.B - 1);");
                 Line(sb,
-                    "return (ushort)(Runtime.B != 0 ? 0x" +
-                    inst.Target.ToString("X4") +
-                    " : 0x" +
-                    inst.Fallthrough.ToString("X4") +
-                    ");");
+                "return (ushort)(Runtime.B != 0 ? 0x" +
+                inst.Target.ToString("X4") +
+                " : 0x" +
+                inst.Fallthrough.ToString("X4") +
+                ");");
             }
             else
             {
                 Line(sb,
-                    "return (ushort)(Runtime.Conditional(" +
-                    inst.Condition.ToString(CultureInfo.InvariantCulture) +
-                    ") ? 0x" +
-                    inst.Target.ToString("X4") +
-                    " : 0x" +
-                    inst.Fallthrough.ToString("X4") +
-                    ");");
+                "return (ushort)(Runtime.Conditional(" +
+                inst.Condition.ToString(CultureInfo.InvariantCulture) +
+                ") ? 0x" +
+                inst.Target.ToString("X4") +
+                " : 0x" +
+                inst.Fallthrough.ToString("X4") +
+                ");");
             }
         }
-
         void EmitJmp(StringBuilder sb, InstructionZ80 inst)
         {
+            Line(sb, "Runtime.TStates += " + CpuZ80.BaseT[inst.Opcode] + ";");
             if (inst.Condition < 0)
             {
                 EmitGoto(sb, inst.Target);
@@ -4096,26 +4100,25 @@ namespace ZX2ILRecomp
             else
             {
                 Line(sb,
-                    "return (ushort)(Runtime.Conditional(" +
-                    inst.Condition.ToString(CultureInfo.InvariantCulture) +
-                    ") ? 0x" +
-                    inst.Target.ToString("X4") +
-                    " : 0x" +
-                    inst.Fallthrough.ToString("X4") +
-                    ");");
+                "return (ushort)(Runtime.Conditional(" +
+                inst.Condition.ToString(CultureInfo.InvariantCulture) +
+                ") ? 0x" +
+                inst.Target.ToString("X4") +
+                " : 0x" +
+                inst.Fallthrough.ToString("X4") +
+                ");");
             }
         }
-
         void EmitJmpInd(StringBuilder sb, InstructionZ80 inst)
         {
+            Line(sb, "Runtime.TStates += " + CpuZ80.BaseT[inst.Opcode] + ";");
             Line(sb, "Runtime.NoteDynamicTarget(Runtime.HL);");
             Line(sb, "return Runtime.HL;");
         }
-
         void EmitCall(StringBuilder sb, InstructionZ80 inst)
         {
+            Line(sb, "Runtime.TStates += " + CpuZ80.BaseT[inst.Opcode] + ";");
             string push = "Runtime.Push16(0x" + inst.Fallthrough.ToString("X4") + ");";
-
             if (inst.Condition < 0)
             {
                 Line(sb, push);
@@ -4134,9 +4137,9 @@ namespace ZX2ILRecomp
                 Line(sb, "}");
             }
         }
-
         void EmitRet(StringBuilder sb, InstructionZ80 inst)
         {
+            Line(sb, "Runtime.TStates += " + CpuZ80.BaseT[inst.Opcode] + ";");
             if (inst.Condition < 0)
             {
                 Line(sb, "return Runtime.Pop16();");
@@ -4147,9 +4150,9 @@ namespace ZX2ILRecomp
                 EmitGoto(sb, inst.Fallthrough);
             }
         }
-
         void EmitRst(StringBuilder sb, InstructionZ80 inst)
         {
+            Line(sb, "Runtime.TStates += " + CpuZ80.BaseT[inst.Opcode] + ";");
             Line(sb, "Runtime.Push16(0x" + ((ushort)(inst.Address + 1)).ToString("X4") + ");");
             EmitGoto(sb, inst.Target);
         }
