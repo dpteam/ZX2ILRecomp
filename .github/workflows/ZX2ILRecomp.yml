@@ -1,0 +1,36 @@
+name: Build ZX2ILRecomp
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    # Add MSBuild to the PATH: https://github.com/microsoft/setup-msbuild
+    - name: Setup MSBuild.exe
+      uses: microsoft/setup-msbuild@v2
+
+    # Restore the application to populate the obj folder with RuntimeIdentifiers
+    - name: Restore the application
+      run: msbuild ZX2ILRecomp.slnx /t:Restore /p:Configuration=Release
+
+    # Build the application
+    - name: Build the application
+      run: msbuild ZX2ILRecomp.slnx /p:Configuration=Release /p:Platform="Any CPU"
+
+    # Upload the release build artifacts
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: ZX2ILRecomp-Release
+        path: D:/a/ZX2ILRecomp/ZX2ILRecomp/bin/Release/net48/ZX2ILRecomp.exe
