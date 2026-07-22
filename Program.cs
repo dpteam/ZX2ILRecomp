@@ -1160,40 +1160,39 @@ namespace ZX2ILRecomp
 
             ZxSnapshot snap = ZxSnapshot.Load(file);
 
-            // Эвристика: SP=0x0000 в 48K невалиден (ROM-зона, туда писать нельзя).
-            // Скорее всего стек сброшен/не сохранён — ставим верх RAM, как на реальном ZX.
+            // 1) Модель ставим ПЕРВОЙ, чтобы все эвристики ниже видели финальное значение.
+            if (_opts.Model == 48 || _opts.Model == 128)
+                snap.Model = _opts.Model;
+
+            // 2) Эвристика SP: 0x0000 в 48K невалиден (ROM-зона, туда стек не пишут).
             if (snap.Model == 48 && snap.SP == 0x0000)
             {
                 Log.Warn("SP=0x0000 looks invalid for 48K (ROM zone). Forcing SP=0xFFFF.");
                 snap.SP = 0xFFFF;
             }
 
-            // Модель ставим ОДИН раз и ДО всех эвристик, чтобы эвристики видели верный Model.
-            if (_opts.Model == 48 || _opts.Model == 128)
-                snap.Model = _opts.Model;
-
-            // Точка входа НЕ может лежать в ROM: ни пустой ROM, ни псевдо-ROM не содержат
-            // код игры, стартовать оттуда нельзя (иначе уезд в NOP/мусор, как было с 0xFFF7).
-            // Форсим RAM-вход НЕЗАВИСИМО от HasRomCode.
+            // 3) Точка входа НЕ может лежать в ROM (<0x4000): ни пустой, ни псевдо-ROM
+            //    не содержат код игры. Форсим RAM-вход НЕЗАВИСИМО от HasRomCode.
+            //    (У Elite PC=0xFFF7 — это валидная RAM, сюда НЕ заходим, стартуем как есть.)
             if (snap.PC < 0x4000)
             {
                 Log.Warn(string.Format(
-                    "PC=0x{0:X4} is in ROM zone; cannot resume there without a real ROM image. Forcing entry to 0x8000.",
+                    "PC=0x{0:X4} is in ROM zone; forcing entry to 0x8000 (no real ROM to resume from).",
                     snap.PC));
                 snap.PC = 0x8000;
                 snap.Entry = 0x8000;
             }
 
-            // Псевдо-ROM ставим ПОСЛЕ эвристики PC: он нужен ТОЛЬКО как обработчик
-            // прерываний во время выполнения (вектор 0x0038), а не как точка входа.
-            // Выставляем HasRomCode=true, чтобы дизассемблер enqueue-нул RST/IM1-векторы.
+            // 4) Псевдо-ROM ставим ПОСЛЕ эвристики PC: он нужен ТОЛЬКО как обработчик
+            //    прерываний во время выполнения (вектор 0x0038), а не как точка входа.
+            //    Выставляем HasRomCode=true, чтобы дизассемблер enqueue-нул RST/IM1-векторы.
             if (!snap.HasRomCode)
             {
                 snap.InstallMinimalRom();
                 Log.Info("No ROM in snapshot; installed minimal IM1 pseudo-ROM (FRAMES++ @0038).");
             }
 
-            // Единственный лог состояния — ПОСЛЕ всех правок, чтобы цифры были финальными.
+            // 5) Единственный лог состояния — ПОСЛЕ всех правок (цифры финальные).
             Log.Info(string.Format(
                 "Model={0}, PC=0x{1:X4}, SP=0x{2:X4}, AF=0x{3:X2}{4:X2}, BC=0x{5:X2}{6:X2}, DE=0x{7:X2}{8:X2}, HL=0x{9:X2}{10:X2}",
                 snap.Model, snap.PC, snap.SP, snap.A, snap.F, snap.B, snap.C, snap.D, snap.E, snap.H, snap.L));
@@ -2096,6 +2095,52 @@ namespace ZX2ILRecomp
             if (_result.Instructions.Count >= max)
                 Log.Warn("Instruction limit reached during disassembly.");
 
+            // === LINEAR SWEEP: покрыть весь код RAM, куда рекурсивный спуск не дошёл. ===
+            // Критично для игр с косвенными переходами/таблицами (Elite и др.): из одной
+            // точки входа статически видно мало инструкций, остальное надо добрать проходом.
+            // Идём последовательно по RAM (экран 0x4000..0x5AFF не трогаем — это не код),
+            // пропуская байты уже декодированных инструкций, и раскручиваем найденные связи.
+            bool[] _covered = new bool[65536];
+            foreach (KeyValuePair<ushort, InstructionZ80> kv in _result.Instructions)
+            {
+                int ca = kv.Key; int cl = kv.Value.Length;
+                for (int i = 0; i < cl && ca + i < 65536; i++) _covered[ca + i] = true;
+            }
+            for (int sa = 0x5B00; sa < 0x10000; sa++)
+            {
+                if (_covered[sa]) continue;
+                ushort aa = (ushort)sa;
+                InstructionZ80 si = Decode(aa);
+                if (!_result.Instructions.ContainsKey(aa))
+                {
+                    _result.Instructions.Add(aa, si);
+                    if (si.Control == OpControlZ80.Invalid && !_result.UnknownOpcodes.Contains(si.Opcode))
+                        _result.UnknownOpcodes.Add(si.Opcode);
+                }
+                for (int i = 0; i < si.Length && aa + i < 65536; i++) _covered[aa + i] = true;
+                if (si.HasTarget) Enqueue(si.Target);
+                if (si.HasFallthrough) Enqueue(si.Fallthrough);
+            }
+            // дренаж очереди: раскрутить связи, которые нашёл sweep
+            while (_queue.Count > 0 && _result.Instructions.Count < max)
+            {
+                ushort addr = _queue.Dequeue();
+                if (_result.Instructions.ContainsKey(addr)) continue;
+                InstructionZ80 inst = Decode(addr);
+                _result.Instructions.Add(addr, inst);
+                if (inst.Control == OpControlZ80.Invalid && !_result.UnknownOpcodes.Contains(inst.Opcode))
+                    _result.UnknownOpcodes.Add(inst.Opcode);
+                if (inst.Control == OpControlZ80.JmpInd && !_result.IndirectJumps.Contains(addr))
+                    _result.IndirectJumps.Add(addr);
+                if ((inst.Control == OpControlZ80.Call || inst.Control == OpControlZ80.Jmp) && inst.HasTarget)
+                {
+                    if (!_result.Functions.Contains(inst.Target))
+                        _result.Functions.Add(inst.Target);
+                }
+                if (inst.HasTarget) Enqueue(inst.Target);
+                if (inst.HasFallthrough) Enqueue(inst.Fallthrough);
+            }
+
             _result.Labels = new List<ushort>(_result.Instructions.Keys);
             _result.Labels.Sort();
 
@@ -2506,6 +2551,8 @@ namespace ZX2ILRecomp
             sb.AppendLine("public static object FrameLock = new object();");
             sb.AppendLine("public static long ClockStart = System.Diagnostics.Stopwatch.GetTimestamp();");
             sb.AppendLine("public static volatile bool ThrottleEnabled = true;");
+            sb.AppendLine("public static int[] PcHist = new int[65536];");
+            sb.AppendLine("public static int PcHistAccum;");
 
             AppendRuntimeTables(sb);
             AppendInitMemory(sb);
@@ -2532,6 +2579,8 @@ namespace ZX2ILRecomp
             sb.AppendLine("I = 0x" + _snap.I.ToString("X2") + "; R = 0x" + _snap.R.ToString("X2") + ";");
             sb.AppendLine("IFF1 = " + (_snap.IFF1 ? "true" : "false") + "; IFF2 = " + (_snap.IFF2 ? "true" : "false") + ";");
             sb.AppendLine("IM = " + _snap.IM + ";");
+            sb.AppendLine("if (!IFF1) { IFF1 = true; IFF2 = true; }");
+            sb.AppendLine("if (IM == 0) IM = 1;");
             sb.AppendLine("Border = 0x" + _snap.Border.ToString("X2") + ";");
             sb.AppendLine("Port7FFD = 0x" + _snap.Port7FFD.ToString("X2") + ";");
             sb.AppendLine("Port1FFD = 0x" + _snap.Port1FFD.ToString("X2") + ";");
@@ -3058,9 +3107,27 @@ namespace ZX2ILRecomp
             sb.AppendLine("ClockStart = System.Diagnostics.Stopwatch.GetTimestamp();");
             sb.AppendLine("}");
 
+            sb.AppendLine("public static void DumpPcHist()");
+            sb.AppendLine("{");
+            sb.AppendLine("int[] topA = new int[8]; int[] topC = new int[8];");
+            sb.AppendLine("for (int pass = 0; pass < 8; pass++)");
+            sb.AppendLine("{");
+            sb.AppendLine("int bi = -1, bv = 0;");
+            sb.AppendLine("for (int i = 0; i < 65536; i++) { if (PcHist[i] > bv) { bv = PcHist[i]; bi = i; } }");
+            sb.AppendLine("if (bi < 0 || bv == 0) break;");
+            sb.AppendLine("topA[pass] = bi; topC[pass] = bv; PcHist[bi] = 0;");
+            sb.AppendLine("}");
+            sb.AppendLine("System.Text.StringBuilder hs = new System.Text.StringBuilder();");
+            sb.AppendLine("hs.Append(\"I=\"); hs.Append(InsCount); hs.Append(\" top: \");");
+            sb.AppendLine("for (int k = 0; k < 8; k++) { if (topC[k] == 0) break; hs.Append(string.Format(\"{0:X4}({1}) \", topA[k], topC[k])); }");
+            sb.AppendLine("try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, \"pc_hist.log\"), hs.ToString() + System.Environment.NewLine); } catch { }");
+            sb.AppendLine("System.Array.Clear(PcHist, 0, 65536);");
+            sb.AppendLine("}");
+
             sb.AppendLine("public static bool CheckInterrupt(ushort pc)");
             sb.AppendLine("{");
             sb.AppendLine("if ((InsCount & 4095) == 0) Throttle();");
+            sb.AppendLine("PcHist[pc]++; PcHistAccum++; if ((PcHistAccum & 0x1FFFFF) == 0) DumpPcHist();");
             sb.AppendLine("if (!InterruptPending || !IFF1) return false;");
             sb.AppendLine("InterruptPending = false;");
             sb.AppendLine("Halted = false;");
