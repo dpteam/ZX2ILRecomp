@@ -3467,6 +3467,28 @@ namespace ZX2ILRecomp
             sb.AppendLine("public static void SetIXH(bool isIX, byte v) { if (isIX) IX = (ushort)((v << 8) | (IX & 0xFF)); else IY = (ushort)((v << 8) | (IY & 0xFF)); }");
             sb.AppendLine("public static void SetIXL(bool isIX, byte v) { if (isIX) IX = (ushort)((IX & 0xFF00) | v); else IY = (ushort)((IY & 0xFF00) | v); }");
 
+            sb.AppendLine("public static byte GetR8IX(int r, bool isIX)");
+            sb.AppendLine("{");
+            sb.AppendLine("switch (r)");
+            sb.AppendLine("{");
+            sb.AppendLine("case 0: return B; case 1: return C; case 2: return D; case 3: return E;");
+            sb.AppendLine("case 4: return isIX ? (byte)(IX >> 8) : (byte)(IY >> 8);");
+            sb.AppendLine("case 5: return isIX ? (byte)(IX & 0xFF) : (byte)(IY & 0xFF);");
+            sb.AppendLine("case 7: return A;");
+            sb.AppendLine("default: return 0;");
+            sb.AppendLine("}");
+            sb.AppendLine("}");
+            sb.AppendLine("public static void SetR8IX(int r, byte v, bool isIX)");
+            sb.AppendLine("{");
+            sb.AppendLine("switch (r)");
+            sb.AppendLine("{");
+            sb.AppendLine("case 0: B = v; break; case 1: C = v; break; case 2: D = v; break; case 3: E = v; break;");
+            sb.AppendLine("case 4: if (isIX) IX = (ushort)((v << 8) | (IX & 0xFF)); else IY = (ushort)((v << 8) | (IY & 0xFF)); break;");
+            sb.AppendLine("case 5: if (isIX) IX = (ushort)((IX & 0xFF00) | v); else IY = (ushort)((IY & 0xFF00) | v); break;");
+            sb.AppendLine("case 7: A = v; break;");
+            sb.AppendLine("}");
+            sb.AppendLine("}");
+
             sb.AppendLine("public static void ExecPrefixed(int prefix, byte op, sbyte d, ushort val)");
             sb.AppendLine("{");
             sb.AppendLine("TStates += PFT[op];");
@@ -3504,7 +3526,20 @@ namespace ZX2ILRecomp
             sb.AppendLine("if ((op & 0xC0) == 0x40) { int dst = (op >> 3) & 7; if (dst != 6) SetR8(dst, Memory.Read(addr)); return; }");
             sb.AppendLine("if ((op & 0xC0) == 0x80) { Alu((op >> 3) & 7, Memory.Read(addr)); return; }");
             sb.AppendLine("}");
-
+            // === 8-бит операции с IXH/IXL (IYH/IYL) + "префикс игнорируется". ===
+            // Сюда доходят только op БЕЗ (IX+d) (те перехвачены UsesIXYDisp выше).
+            // DD 76 = HALT (префикс игнор). INC/DEC/LD r,n и LD r,r'/ALU r: регистры
+            // 4,5 читаются/пишутся как IXH/IXL, остальные (0,1,2,3,7) = префикс игнор.
+            sb.AppendLine("if (op == 0x76) { Halt(); return; }");
+            sb.AppendLine("if ((op & 0xC7) == 0x04) { int rg = (op >> 3) & 7; if (rg != 6) { SetR8IX(rg, Inc8(GetR8IX(rg, isIX)), isIX); return; } }");
+            sb.AppendLine("if ((op & 0xC7) == 0x05) { int rg = (op >> 3) & 7; if (rg != 6) { SetR8IX(rg, Dec8(GetR8IX(rg, isIX)), isIX); return; } }");
+            sb.AppendLine("if ((op & 0xC7) == 0x06) { int rg = (op >> 3) & 7; if (rg != 6) { SetR8IX(rg, n, isIX); return; } }");
+            sb.AppendLine("if (op >= 0x40 && op <= 0xBF)");
+            sb.AppendLine("{");
+            sb.AppendLine("int dst = (op >> 3) & 7; int src = op & 7;");
+            sb.AppendLine("if ((op & 0x80) == 0) { SetR8IX(dst, GetR8IX(src, isIX), isIX); return; }");
+            sb.AppendLine("else { Alu((op >> 3) & 7, GetR8IX(src, isIX)); return; }");
+            sb.AppendLine("}");
             sb.AppendLine("UnknownOpcode(op, LastPC);");
             sb.AppendLine("}");
 
@@ -3555,6 +3590,7 @@ namespace ZX2ILRecomp
             sb.AppendLine("if (op == 0xDD || op == 0xFD)");
             sb.AppendLine("{");
             sb.AppendLine("byte op2 = Memory.Read((ushort)(pc + 1));");
+            sb.AppendLine("if (op2 == 0xDD || op2 == 0xFD || op2 == 0xED) { TStates += 4; DispatchTarget = (ushort)(pc + 1); return true; }");
             sb.AppendLine("if (op2 == 0xCB) { sbyte d = (sbyte)Memory.Read((ushort)(pc + 2)); byte cb = Memory.Read((ushort)(pc + 3)); ExecPrefixedCB(op, d, cb); DispatchTarget = (ushort)(pc + 4); return true; }");
             sb.AppendLine("if (op2 == 0xE9) { TStates += 8; ushort ixy = (op == 0xDD) ? IX : IY; Runtime.NoteDynamicTarget(ixy); DispatchTarget = ixy; return true; }");
             sb.AppendLine("int len = GetLength(pc);");
