@@ -1421,6 +1421,8 @@ namespace ZX2ILRecomp
                 return LoadTap(data);
             if (ext == ".szx")
                 return LoadSZX(data);
+            if (ext == ".tzx")
+                return LoadTzx(data);
 
             throw new InvalidDataException("Unsupported extension: " + ext);
         }
@@ -1429,6 +1431,12 @@ namespace ZX2ILRecomp
         {
             if (p + 1 >= d.Length) return 0;
             return (ushort)(d[p] | (d[p + 1] << 8));
+        }
+
+        static int Get32(byte[] d, int p)
+        {
+            if (p + 3 >= d.Length) return 0;
+            return (int)((uint)d[p] | ((uint)d[p + 1] << 8) | ((uint)d[p + 2] << 16) | ((uint)d[p + 3] << 24));
         }
 
         static ZxSnapshot LoadZ80(byte[] data)
@@ -1840,6 +1848,109 @@ namespace ZX2ILRecomp
             if (s.PC == 0) s.PC = 0x8000;
             s.Entry = s.PC;
             s.HasRomCode = !AllZero(s.Rom0) || !AllZero(s.Rom1);
+            return s;
+        }
+
+        static void ApplyTapBlock(ZxSnapshot s, byte[] block, byte[] flat, ref ushort entry, ref bool haveEntry, ref int pendingStart, ref int pendingLen)
+        {
+            if (block == null || block.Length < 1) return;
+            byte flag = block[0];
+            if (flag == 0x00 && block.Length >= 19)
+            {
+                byte type = block[1];
+                int dlen = Get16(block, 12);
+                int param1 = Get16(block, 14);
+                int param2 = Get16(block, 16);
+                if (type == 3)
+                {
+                    pendingStart = param2; pendingLen = dlen;
+                    if (!haveEntry && param2 >= 0x4000) { entry = (ushort)param2; haveEntry = true; }
+                }
+                else if (type == 0)
+                {
+                    pendingStart = 0x8000; pendingLen = dlen;
+                    if (!haveEntry && param1 < 32768) { entry = 0x8000; haveEntry = true; }
+                }
+                else pendingStart = -1;
+            }
+            else if (flag == 0xFF && pendingStart >= 0)
+            {
+                int dataLen = block.Length - 2;
+                int copy = dataLen < pendingLen ? dataLen : pendingLen;
+                for (int i = 0; i < copy; i++)
+                {
+                    int addr = pendingStart + i;
+                    if (addr >= 0x4000 && addr < 0x10000) flat[addr] = block[1 + i];
+                }
+                pendingStart = -1;
+            }
+        }
+        static ZxSnapshot LoadTzx(byte[] data)
+        {
+            ZxSnapshot s = new ZxSnapshot();
+            s.Model = 48;
+            byte[] flat = new byte[65536];
+            ushort entry = 0; bool haveEntry = false; int pendingStart = -1, pendingLen = -1;
+            if (data.Length < 10) throw new InvalidDataException("TZX too short.");
+            int pos = 10; // "ZXTape!" + 0x1A + major + minor
+            while (pos + 1 <= data.Length)
+            {
+                byte id = data[pos]; pos++;
+                int need, n, total;
+                switch (id)
+                {
+                    case 0x10:
+                        if (pos + 4 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry);
+                        total = Get16(data, pos + 2); pos += 4;
+                        if (total < 0 || pos + total > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry);
+                        { byte[] blk = new byte[total]; Array.Copy(data, pos, blk, 0, total); pos += total; ApplyTapBlock(s, blk, flat, ref entry, ref haveEntry, ref pendingStart, ref pendingLen); }
+                        break;
+                    case 0x11:
+                        if (pos + 18 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry);
+                        total = (int)((uint)data[pos + 15] | ((uint)data[pos + 16] << 8) | ((uint)data[pos + 17] << 16)); pos += 18;
+                        if (total < 0 || pos + total > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry);
+                        { byte[] blk = new byte[total]; Array.Copy(data, pos, blk, 0, total); pos += total; ApplyTapBlock(s, blk, flat, ref entry, ref haveEntry, ref pendingStart, ref pendingLen); }
+                        break;
+                    case 0x12: pos += 4; break;
+                    case 0x13: if (pos + 1 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); n = data[pos]; pos += 1 + n * 2; break;
+                    case 0x14:
+                        if (pos + 10 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry);
+                        total = (int)((uint)data[pos + 7] | ((uint)data[pos + 8] << 8) | ((uint)data[pos + 9] << 16)); pos += 10;
+                        if (total < 0 || pos + total > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry);
+                        if (pendingStart >= 0) { int copy = total < pendingLen ? total : pendingLen; for (int i = 0; i < copy; i++) { int a = pendingStart + i; if (a >= 0x4000 && a < 0x10000) flat[a] = data[pos + i]; } pendingStart = -1; }
+                        else Log.Warn("TZX pure-data block (0x14) without preceding header; skipped.");
+                        pos += total; break;
+                    case 0x15: if (pos + 8 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); total = (int)((uint)data[pos + 4] | ((uint)data[pos + 5] << 8) | ((uint)data[pos + 6] << 16)); pos += 8 + total; Log.Warn("TZX direct-recording block (0x15) skipped (audio, not memory)."); break;
+                    case 0x18: if (pos + 4 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); total = Get32(data, pos); pos += 4 + total; break;
+                    case 0x19: if (pos + 4 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); total = Get32(data, pos); pos += 4 + total; break;
+                    case 0x20: pos += 2; break;
+                    case 0x21: if (pos + 1 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); n = data[pos]; pos += 1 + n; break;
+                    case 0x22: break;
+                    case 0x23: pos += 2; break;
+                    case 0x24: pos += 2; break;
+                    case 0x25: break;
+                    case 0x26: if (pos + 2 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); n = Get16(data, pos); pos += 2 + n * 2; break;
+                    case 0x27: break;
+                    case 0x28: if (pos + 2 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); n = Get16(data, pos); pos += 2 + n; break;
+                    case 0x2A: pos += 4; break;
+                    case 0x2B: pos += 5; break;
+                    case 0x30: if (pos + 1 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); n = data[pos]; pos += 1 + n; break;
+                    case 0x31: if (pos + 2 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); n = data[pos + 1]; pos += 2 + n; break;
+                    case 0x32: if (pos + 2 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); n = Get16(data, pos); pos += 2 + n; break;
+                    case 0x33: if (pos + 1 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); n = data[pos]; pos += 1 + n * 3; break;
+                    case 0x35: if (pos + 20 > data.Length) return FinalizeTap(s, flat, ref entry, haveEntry); total = Get32(data, pos + 16); pos += 20 + total; break;
+                    case 0x5A: pos += 9; break;
+                    default: Log.Warn(string.Format("TZX unknown block id 0x{0:X2} at offset {1}; stopping parse.", id, pos - 1)); return FinalizeTap(s, flat, ref entry, haveEntry);
+                }
+                if (pos < 0 || pos > data.Length) break;
+            }
+            return FinalizeTap(s, flat, ref entry, haveEntry);
+        }
+        static ZxSnapshot FinalizeTap(ZxSnapshot s, byte[] flat, ref ushort entry, bool haveEntry)
+        {
+            if (!haveEntry) entry = 0x8000;
+            s.SetFlatRam(flat);
+            s.PC = entry; s.Entry = entry; s.HasRomCode = false;
             return s;
         }
 
@@ -3393,6 +3504,12 @@ namespace ZX2ILRecomp
             sb.AppendLine("byte op2 = Memory.Read((ushort)(pc + 1));");
             sb.AppendLine("if (op2 == 0xCB) { sbyte d = (sbyte)Memory.Read((ushort)(pc + 2)); byte cb = Memory.Read((ushort)(pc + 3)); ExecPrefixedCB(op, d, cb); DispatchTarget = (ushort)(pc + 4); return true; }");
             sb.AppendLine("if (op2 == 0xE9) { ushort ixy = (op == 0xDD) ? IX : IY; Runtime.NoteDynamicTarget(ixy); DispatchTarget = ixy; return true; }");
+            // Префикс DD/FD применим к op2? Если НЕТ — по спеке Z80 префикс игнорируется,
+            // и выполняется базовая инструкция, физически лежащая по pc+1 (она сама корректно
+            // выставит DispatchTarget, в т.ч. для JP/JR/CALL/RET/HALT). Без этого DD 99 и т.п.
+            // падали в UnknownOpcode (краш Elite .tap на $BE53).
+            sb.AppendLine("bool ixApplicable = (op2==0x21||op2==0x22||op2==0x2A||op2==0x23||op2==0x2B||op2==0x24||op2==0x25||op2==0x26||op2==0x2C||op2==0x2D||op2==0x2E||op2==0xE1||op2==0xE5||op2==0xE3||op2==0xF9) || ((op2 & 0xCF) == 0x09) || (UsesIXYDisp[op2] != 0);");
+            sb.AppendLine("if (!ixApplicable) { return ExecDynamicOne((ushort)(pc + 1)); }");
             sb.AppendLine("int len = GetLength(pc);");
             sb.AppendLine("sbyte d2 = 0; ushort nn2 = 0;");
             sb.AppendLine("if (UsesIXYDisp[op2] != 0) { d2 = (sbyte)Memory.Read((ushort)(pc + 2)); if (len == 4) nn2 = Memory.Read((ushort)(pc + 3)); }");
