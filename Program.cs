@@ -1161,6 +1161,13 @@ namespace ZX2ILRecomp
             Log.Step("=== Processing snapshot: " + file + " ===");
 
             ZxSnapshot snap = ZxSnapshot.Load(file);
+            // Эвристика: SP=0x0000 в 48K невалиден (туда писать нельзя, ROM-зона).
+            // Скорее всего стек был сброшен/не сохранён — ставим верх RAM, как на реальном ZX.
+            if (snap.Model == 48 && snap.SP == 0x0000)
+            {
+                Log.Warn("SP=0x0000 looks invalid for 48K (ROM zone). Forcing SP=0xFFFF.");
+                snap.SP = 0xFFFF;
+            }
             if (snap.PC < 0x4000 && !snap.HasRomCode)
             {
                 Log.Warn(string.Format(
@@ -2363,52 +2370,6 @@ namespace ZX2ILRecomp
 
             _emitted = new List<ushort>(_labels.Keys);
             _emitted.Sort();
-
-            // ==========================================================
-            // Anti-CS1647 cap.
-            // Если статических label слишком много, компилятор C# может
-            // упасть с CS1647. Оставляем самые важные адреса, остальные
-            // будут выполняться через dynamic fallback.
-            // ==========================================================
-            const int MAX_STATIC_LABELS = 4096;
-
-            if (_emitted.Count > MAX_STATIC_LABELS)
-            {
-                List<ushort> kept = new List<ushort>();
-
-                if (_labels.ContainsKey(_model.Entry) && !kept.Contains(_model.Entry))
-                    kept.Add(_model.Entry);
-
-                foreach (ushort a in _model.Functions)
-                {
-                    if (kept.Count >= MAX_STATIC_LABELS) break;
-                    if (_labels.ContainsKey(a) && !kept.Contains(a))
-                        kept.Add(a);
-                }
-
-                foreach (ushort a in _model.DynamicTargets)
-                {
-                    if (kept.Count >= MAX_STATIC_LABELS) break;
-                    if (_labels.ContainsKey(a) && !kept.Contains(a))
-                        kept.Add(a);
-                }
-
-                foreach (ushort a in _emitted)
-                {
-                    if (kept.Count >= MAX_STATIC_LABELS) break;
-                    if (!kept.Contains(a))
-                        kept.Add(a);
-                }
-
-                kept.Sort();
-                _emitted = kept;
-
-                _labels.Clear();
-                foreach (ushort a in _emitted)
-                    _labels[a] = true;
-
-                Log.Warn("Static label count capped to " + MAX_STATIC_LABELS + " to avoid CS1647.");
-            }
         }
 
         public string Generate()
@@ -2703,7 +2664,8 @@ namespace ZX2ILRecomp
 
             sb.AppendLine("static ushort StepDynamic(ushort pc)");
             sb.AppendLine("{");
-            Line(sb, "Runtime.ReportDynamicTarget(pc);");
+            // ВАЖНО: здесь НЕ логируем. Это линейный fallback-прогон, а не цель перехода.
+            // Реальные косвенные цели логируются в точках перехода (NoteDynamicTarget).
             Line(sb, "Runtime.DispatchTarget = pc;");
             Line(sb, "if (!Runtime.ExecDynamicOne(Runtime.DispatchTarget)) { Runtime.Trap(\"Dynamic execution failed at $\" + pc.ToString(\"X4\")); return 0; }");
             Line(sb, "return Runtime.DispatchTarget;");
@@ -2779,6 +2741,25 @@ namespace ZX2ILRecomp
             sb.AppendLine("try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, \"dynamic_targets.log\"), addr.ToString(\"X4\") + System.Environment.NewLine); } catch { }");
             sb.AppendLine("}");
             sb.AppendLine("}");
+            sb.AppendLine("}");
+
+            sb.AppendLine("static ushort _lastLoggedTarget = 0;");
+            sb.AppendLine("static bool _haveLastLogged = false;");
+
+            sb.AppendLine("public static void NoteDynamicTarget(ushort addr)");
+            sb.AppendLine("{");
+            // Фильтр 1: ROM-зона и откровенный мусор битого стека/векторов.
+            Line(sb, "if (addr < 0x4000) return;");
+            // Фильтр 2: "линейный прогон" — адрес идёт строго +1 от предыдущей logged-цели.
+            // Это признак того, что мы шагаем по данным/линейному коду, а не прыгнули.
+            Line(sb, "if (_haveLastLogged && addr == (ushort)(_lastLoggedTarget + 1)) return;");
+            Line(sb, "lock (DynLock)");
+            Line(sb, "{");
+            Line(sb, "if (SeenDynamic.ContainsKey(addr)) return;");
+            Line(sb, "SeenDynamic.Add(addr, true);");
+            Line(sb, "_lastLoggedTarget = addr; _haveLastLogged = true;");
+            Line(sb, "try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, \"dynamic_targets.log\"), addr.ToString(\"X4\") + System.Environment.NewLine); } catch { }");
+            Line(sb, "}");
             sb.AppendLine("}");
 
             sb.AppendLine("public static bool Conditional(int cc)");
@@ -3298,7 +3279,7 @@ namespace ZX2ILRecomp
             sb.AppendLine("{");
             sb.AppendLine("byte op2 = Memory.Read((ushort)(pc + 1));");
             sb.AppendLine("if (op2 == 0xCB) { sbyte d = (sbyte)Memory.Read((ushort)(pc + 2)); byte cb = Memory.Read((ushort)(pc + 3)); ExecPrefixedCB(op, d, cb); DispatchTarget = (ushort)(pc + 4); return true; }");
-            sb.AppendLine("if (op2 == 0xE9) { DispatchTarget = (op == 0xDD) ? IX : IY; return true; }");
+            sb.AppendLine("if (op2 == 0xE9) { ushort ixy = (op == 0xDD) ? IX : IY; Runtime.NoteDynamicTarget(ixy); DispatchTarget = ixy; return true; }");
             sb.AppendLine("int len = GetLength(pc);");
             sb.AppendLine("sbyte d2 = 0; ushort nn2 = 0;");
             sb.AppendLine("if (UsesIXYDisp[op2] != 0) { d2 = (sbyte)Memory.Read((ushort)(pc + 2)); if (len == 4) nn2 = Memory.Read((ushort)(pc + 3)); }");
@@ -3324,12 +3305,12 @@ namespace ZX2ILRecomp
             sb.AppendLine("case 0xCD: Push16((ushort)(pc + 3)); DispatchTarget = operand; return true;");
             sb.AppendLine("case 0xC4: case 0xCC: case 0xD4: case 0xDC: case 0xE4: case 0xEC: case 0xF4: case 0xFC:");
             sb.AppendLine("if (Conditional((op >> 3) & 7)) { Push16((ushort)(pc + 3)); DispatchTarget = operand; } else DispatchTarget = (ushort)(pc + 3); return true;");
-            sb.AppendLine("case 0xC9: DispatchTarget = Pop16(); return true;");
+            sb.AppendLine("case 0xC9: { ushort t = Pop16(); Runtime.NoteDynamicTarget(t); DispatchTarget = t; return true; }");
             sb.AppendLine("case 0xC0: case 0xC8: case 0xD0: case 0xD8: case 0xE0: case 0xE8: case 0xF0: case 0xF8:");
             sb.AppendLine("if (Conditional((op >> 3) & 7)) DispatchTarget = Pop16(); else DispatchTarget = (ushort)(pc + 1); return true;");
             sb.AppendLine("case 0xC7: case 0xCF: case 0xD7: case 0xDF: case 0xE7: case 0xEF: case 0xF7: case 0xFF:");
             sb.AppendLine("Push16((ushort)(pc + 1)); DispatchTarget = (ushort)(op & 0x38); return true;");
-            sb.AppendLine("case 0xE9: DispatchTarget = HL; return true;");
+            sb.AppendLine("case 0xE9: Runtime.NoteDynamicTarget(HL); DispatchTarget = HL; return true;");
             sb.AppendLine("case 0x76: Halt(); DispatchTarget = (ushort)(pc + 1); return true;");
             sb.AppendLine("}");
 
@@ -3851,6 +3832,7 @@ namespace ZX2ILRecomp
 
         void EmitJmpInd(StringBuilder sb, InstructionZ80 inst)
         {
+            Line(sb, "Runtime.NoteDynamicTarget(Runtime.HL);");
             Line(sb, "return Runtime.HL;");
         }
 
