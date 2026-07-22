@@ -1154,57 +1154,49 @@ namespace ZX2ILRecomp
             string safeName = FileSystemUtil.SanitizeFileName(romName);
             string workDir = Path.Combine(_opts.OutputPath, safeName);
             string srcDir = Path.Combine(workDir, "src");
-
             Directory.CreateDirectory(workDir);
             if (_opts.SaveSource) Directory.CreateDirectory(srcDir);
-
             Log.Step("=== Processing snapshot: " + file + " ===");
 
             ZxSnapshot snap = ZxSnapshot.Load(file);
-            // Эвристика: SP=0x0000 в 48K невалиден (туда писать нельзя, ROM-зона).
-            // Скорее всего стек был сброшен/не сохранён — ставим верх RAM, как на реальном ZX.
+
+            // Эвристика: SP=0x0000 в 48K невалиден (ROM-зона, туда писать нельзя).
+            // Скорее всего стек сброшен/не сохранён — ставим верх RAM, как на реальном ZX.
             if (snap.Model == 48 && snap.SP == 0x0000)
             {
                 Log.Warn("SP=0x0000 looks invalid for 48K (ROM zone). Forcing SP=0xFFFF.");
                 snap.SP = 0xFFFF;
             }
-            if (snap.PC < 0x4000 && !snap.HasRomCode)
+
+            // Модель ставим ОДИН раз и ДО всех эвристик, чтобы эвристики видели верный Model.
+            if (_opts.Model == 48 || _opts.Model == 128)
+                snap.Model = _opts.Model;
+
+            // Точка входа НЕ может лежать в ROM: ни пустой ROM, ни псевдо-ROM не содержат
+            // код игры, стартовать оттуда нельзя (иначе уезд в NOP/мусор, как было с 0xFFF7).
+            // Форсим RAM-вход НЕЗАВИСИМО от HasRomCode.
+            if (snap.PC < 0x4000)
             {
                 Log.Warn(string.Format(
-                    "PC=0x{0:X4} points to ROM, but no usable ROM code is present. Forcing entry to 0x8000.",
+                    "PC=0x{0:X4} is in ROM zone; cannot resume there without a real ROM image. Forcing entry to 0x8000.",
                     snap.PC));
-
                 snap.PC = 0x8000;
                 snap.Entry = 0x8000;
             }
-            if (_opts.Model == 48 || _opts.Model == 128)
-                snap.Model = _opts.Model;
 
-            Log.Info(string.Format(
-                "Model={0}, PC=0x{1:X4}, SP=0x{2:X4}, AF=0x{3:X2}{4:X2}, BC=0x{5:X2}{6:X2}, DE=0x{7:X2}{8:X2}, HL=0x{9:X2}{10:X2}",
-                snap.Model,
-                snap.PC,
-                snap.SP,
-                snap.A,
-                snap.F,
-                snap.B,
-                snap.C,
-                snap.D,
-                snap.E,
-                snap.H,
-                snap.L));
-
-            if (_opts.Model == 48 || _opts.Model == 128)
-                snap.Model = _opts.Model;
-
-            // НЕТ ROM в снапшоте -> ставим обработчик прерываний, иначе зависание после 1-го HALT.
+            // Псевдо-ROM ставим ПОСЛЕ эвристики PC: он нужен ТОЛЬКО как обработчик
+            // прерываний во время выполнения (вектор 0x0038), а не как точка входа.
+            // Выставляем HasRomCode=true, чтобы дизассемблер enqueue-нул RST/IM1-векторы.
             if (!snap.HasRomCode)
             {
                 snap.InstallMinimalRom();
                 Log.Info("No ROM in snapshot; installed minimal IM1 pseudo-ROM (FRAMES++ @0038).");
             }
 
-            Log.Info(string.Format("")); // WTF why empty here
+            // Единственный лог состояния — ПОСЛЕ всех правок, чтобы цифры были финальными.
+            Log.Info(string.Format(
+                "Model={0}, PC=0x{1:X4}, SP=0x{2:X4}, AF=0x{3:X2}{4:X2}, BC=0x{5:X2}{6:X2}, DE=0x{7:X2}{8:X2}, HL=0x{9:X2}{10:X2}",
+                snap.Model, snap.PC, snap.SP, snap.A, snap.F, snap.B, snap.C, snap.D, snap.E, snap.H, snap.L));
 
             DisassemblerZ80 dis = new DisassemblerZ80(snap);
 
@@ -1232,15 +1224,13 @@ namespace ZX2ILRecomp
 
             string[] dynamicTargetFiles = new string[]
             {
-                Path.Combine(workDir, "dynamic_targets.txt"),
-                Path.Combine(workDir, "dynamic_targets.log")
+        Path.Combine(workDir, "dynamic_targets.txt"),
+        Path.Combine(workDir, "dynamic_targets.log")
             };
-
             foreach (string dynamicTargetsFile in dynamicTargetFiles)
             {
                 if (!File.Exists(dynamicTargetsFile))
                     continue;
-
                 try
                 {
                     foreach (string rawLine in File.ReadAllLines(dynamicTargetsFile))
@@ -1250,7 +1240,6 @@ namespace ZX2ILRecomp
                             continue;
                         if (line.StartsWith(";") || line.StartsWith("#"))
                             continue;
-
                         line = line.Replace("0x", "").Replace("$", "").Trim();
                         ushort addr;
                         if (ushort.TryParse(line, NumberStyles.HexNumber, null, out addr))
@@ -1265,12 +1254,10 @@ namespace ZX2ILRecomp
                     Log.Warn("Failed to read dynamic targets file: " + ex.Message);
                 }
             }
-
             if (dis.ForcedAddresses.Count > 0)
                 Log.Info("Forced dynamic targets count: " + dis.ForcedAddresses.Count);
 
             AnalysisResultZ80 model = dis.Analyze();
-
             Log.Info(string.Format(
                 "Analysis: instructions={0}, labels={1}, functions~={2}, unknownOps={3}, indirectJumps={4}",
                 model.Instructions.Count,
@@ -1278,23 +1265,19 @@ namespace ZX2ILRecomp
                 model.Functions.Count,
                 model.UnknownOpcodes.Count,
                 model.IndirectJumps.Count));
-
             foreach (ushort addr in model.IndirectJumps)
                 Log.Warn("Indirect JP at: 0x" + addr.ToString("X4"));
-
             foreach (byte op in model.UnknownOpcodes)
                 Log.Warn("Unknown opcode: 0x" + op.ToString("X2"));
 
             LifterZ80 lifter = new LifterZ80(snap, model, safeName);
             string code = lifter.Generate();
-
             if (_opts.SaveSource)
             {
                 string srcPath = Path.Combine(srcDir, "Game.generated.cs");
                 File.WriteAllText(srcPath, code, Encoding.UTF8);
                 Log.Ok("Intermediate C# saved: " + srcPath);
             }
-
             if (_opts.NoCompile)
             {
                 Log.Warn("Compilation disabled (--no-compile).");
@@ -1307,7 +1290,6 @@ namespace ZX2ILRecomp
                 Log.Ok("Compiled: " + exePath);
             else
                 Log.Error("Compilation of generated code failed. See log and src/Game.generated.cs.");
-
             return compiled;
         }
 
@@ -1461,10 +1443,11 @@ namespace ZX2ILRecomp
             s.F = data[1];
             s.C = data[2];
             s.B = data[3];
-            s.E = data[4];
-            s.D = data[5];
-            s.L = data[6];
-            s.H = data[7];
+            // Спека .z80 v1: оффсеты 4,5 = L,H ; 6,7 = E,D (раньше было перепутано).
+            s.L = data[4];
+            s.H = data[5];
+            s.E = data[6];
+            s.D = data[7];
 
             ushort pc = Get16(data, 8);
             s.SP = Get16(data, 10);
@@ -1526,6 +1509,15 @@ namespace ZX2ILRecomp
                 pos += hdrLen;
                 LoadZ80Pages(s, data, pos);
             }
+
+            try
+            {
+                StringBuilder hx = new StringBuilder();
+                int n = data.Length < 32 ? data.Length : 32;
+                for (int i = 0; i < n; i++) { if (i > 0) hx.Append(' '); hx.Append(data[i].ToString("X2")); }
+                Log.Info("Z80 header hex[0..31]: " + hx.ToString());
+            }
+            catch { }
 
             s.Entry = s.PC;
             if (s.Entry == 0) s.Entry = 0x8000;
