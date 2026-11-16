@@ -427,3 +427,23 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# ZX2ILRecomp specific
+zx_lifted_output/
+lifted/
+logs/
+dist/
+*.generated.cs
+
+# Windows shell droppings
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Local test material: ROM images and game files are copyrighted and must
+# never be committed. CI uses the synthetic snapshots from --selftest instead.
+roms/
+testdata/

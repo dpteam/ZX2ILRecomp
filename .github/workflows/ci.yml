@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build:
+    name: build + test (${{ matrix.configuration }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore ZX2ILRecomp.slnx
+
+      - name: Build
+        run: dotnet build ZX2ILRecomp.slnx -c ${{ matrix.configuration }} --no-restore -warnaserror
+
+      - name: Unit tests
+        run: dotnet run --project tests/ZX2ILRecomp.Tests/ZX2ILRecomp.Tests.csproj -c ${{ matrix.configuration }} --no-build
+
+      - name: Self-test (lift, package, execute every container)
+        run: dotnet run --project ZX2ILRecomp.csproj -c ${{ matrix.configuration }} --no-build -- --selftest --frames 60 --keep
+
+      - name: Upload self-test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-${{ matrix.configuration }}
+          path: zx_lifted_output/_selftest
+          if-no-files-found: ignore
+          retention-days: 7
+
+  package:
+    name: publish
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish lifter
+        run: >
+          dotnet publish ZX2ILRecomp.csproj
+          -c Release
+          -r win-x64
+          --self-contained false
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o dist
+
+      - name: Verify published layout
+        shell: pwsh
+        run: |
+          # The single-file bundle carries the managed assemblies, but
+          # assets/icon.ico must sit next to the exe or GamePackager cannot use
+          # it as the fallback icon for generated games.
+          $missing = @()
+          if (-not (Test-Path 'dist/ZX2ILRecomp.exe')) { $missing += 'ZX2ILRecomp.exe' }
+          if (-not (Test-Path 'dist/assets/icon.ico')) { $missing += 'assets/icon.ico' }
+
+          if ($missing.Count -gt 0) {
+            Write-Error "Published output is missing: $($missing -join ', ')"
+            exit 1
+          }
+
+          Write-Host 'Published layout looks complete.'
+
+      # The published binary is a WinExe, so a broken bundle would fail to start
+      # at all. Running the self-test through it proves the bundle, the SDK
+      # hand-off and the generated-game pipeline all work from a shipped build.
+      - name: Smoke-test published binary
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'smoke-out'
+
+          & dist/ZX2ILRecomp.exe --selftest --frames 30 --output $out --no-tui 2>&1 |
+            Tee-Object -Variable log
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Published binary exited with $LASTEXITCODE"
+            exit 1
+          }
+
+          if (($log -join "`n") -notmatch 'Self-test passed') {
+            Write-Error 'Published binary did not run the self-test.'
+            exit 1
+          }
+
+          Write-Host 'Published binary runs.'
+
+      - name: Verify the generated game runs
+        shell: pwsh
+        run: |
+          # The self-test already executed the generated game headlessly; this
+          # step asserts the artifacts are on disk where a user would find them.
+          $exe = 'zx_lifted_output/_selftest/out/loop-48-sna/loop-48-sna.exe'
+          $src = 'zx_lifted_output/_selftest/out/loop-48-sna/src/Game.generated.cs'
+          $rep = 'zx_lifted_output/_selftest/out/loop-48-sna/analysis.txt'
+
+          foreach ($file in @($exe, $src, $rep)) {
+            if (-not (Test-Path $file)) {
+              Write-Error "Expected output missing: $file"
+              exit 1
+            }
+          }
+
+          Write-Host 'Lifted game artifacts present.'
+
+      - name: Upload lifter
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZX2ILRecomp-win-x64
+          path: dist
+          retention-days: 30

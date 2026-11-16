@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>ZX2ILRecomp.Tests</AssemblyName>
+    <RootNamespace>ZX2ILRecomp.Tests</RootNamespace>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+  </PropertyGroup>
+
+  <!--
+    No test framework package on purpose: this project is a plain console
+    executable with a tiny assertion harness (TestHarness.cs). It keeps the
+    "zero third-party dependencies" promise while still giving CI a real
+    `dotnet run` test step with a non-zero exit code on failure.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\ZX2ILRecomp.csproj" />
+  </ItemGroup>
+
+</Project>

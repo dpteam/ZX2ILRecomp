@@ -1,3 +1,5 @@
 <Solution>
   <Project Path="ZX2ILRecomp.csproj" />
+  <Project Path="tests/ZX2ILRecomp.Tests/ZX2ILRecomp.Tests.csproj" />
+  <Project Path="tools/Branding/Branding.csproj" />
 </Solution>

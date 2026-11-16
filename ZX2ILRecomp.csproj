@@ -2,18 +2,49 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net48</TargetFramework>
-	<UseWindowsForms>true</UseWindowsForms>
-	<StartupObject>ZX2ILRecomp.Program</StartupObject>
-	<ApplicationIcon>disk.ico</ApplicationIcon>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>ZX2ILRecomp</AssemblyName>
+    <RootNamespace>ZX2ILRecomp</RootNamespace>
+    <AssemblyTitle>ZX2ILRecomp</AssemblyTitle>
+    <Product>ZX2ILRecomp</Product>
+    <Description>Static ZX Spectrum (Z80) recompiler that emits self-contained .NET games.</Description>
+    <ApplicationIcon>assets\icon.ico</ApplicationIcon>
+    <Version>0.11.0</Version>
+    <NeutralLanguage>en</NeutralLanguage>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <DebugType>portable</DebugType>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="disk.ico" />
+    <!-- Generated games, tests and helper tools must never be compiled into the lifter. -->
+    <Compile Remove="out\**\*.cs" />
+    <Compile Remove="zx_lifted_output\**\*.cs" />
+    <Compile Remove="lifted\**\*.cs" />
+    <Compile Remove="tools\**\*.cs" />
+    <Compile Remove="tests\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="System.Windows.Forms" />
+    <!-- Branding assets, copied next to the exe. assets/icon.ico is not just
+         decoration: the packager falls back to it when a game has no captured
+         icon, so it has to exist on disk at runtime. The single-file bundler
+         would otherwise swallow it (it matches the .ico it embeds into the
+         apphost), hence ExcludeFromSingleFile. -->
+    <None Include="assets\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="assets\icon.ico" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ZX2ILRecomp.Tests" />
   </ItemGroup>
 
 </Project>
