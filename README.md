@@ -167,8 +167,31 @@ dotnet run -- --selftest --frames 60 --keep       # lift + package + run
 
 `--selftest` builds a synthetic snapshot for every supported container, lifts
 it, packages it, and **executes the result headlessly**, checking that it
-reaches the frame budget without trapping. A loader regression, a broken opcode
-table or a runtime that deadlocks on `HALT` all fail there.
+reaches the frame budget without trapping and that the rendered frame has a
+border, paper and ink. A loader regression, a broken opcode table or a runtime
+that deadlocks on `HALT` all fail there.
+
+### Demo builds
+
+To see what the tool does with real games:
+
+```powershell
+# put your snapshots in testdata/, then:
+powershell -File tools/demo.ps1
+```
+
+Every snapshot is lifted into `bin/recompiled/<name>/`, run headlessly for a few
+hundred frames and screenshotted. The output is git-ignored: these are builds of
+copyrighted games, and only the script is committed.
+
+```
+bin/recompiled/Manic Miner/
+  Manic Miner.exe
+  src/Game.generated.cs
+  analysis.txt
+  frame.png        <- the screenshot the headless run took
+  demo.txt         <- what that run reported
+```
 
 ## Requirements
 
@@ -183,7 +206,7 @@ table or a runtime that deadlocks on `HALT` all fail there.
 | [docs/SNAPSHOTS.md](docs/SNAPSHOTS.md) | container formats, bank mapping, ROM handling |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | what the generated game actually contains |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | games that hang, render wrong, or trap |
-| [ROADMAP.md](ROADMAP.md) | what is next, including ZX80/ZX81 |
+| [ROADMAP.md](ROADMAP.md) | what is next: disk images, audio-in, ZX80/ZX81 |
 
 ## Contributing
 

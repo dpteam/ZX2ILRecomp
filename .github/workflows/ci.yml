@@ -99,12 +99,16 @@ jobs:
       # The published binary is a WinExe, so a broken bundle would fail to start
       # at all. Running the self-test through it proves the bundle, the SDK
       # hand-off and the generated-game pipeline all work from a shipped build.
+      #
+      # --keep is mandatory here: on success the self-test deletes its own
+      # artifacts, and the next step inspects them. Without it, that step fails
+      # with "Expected output missing" even though everything worked.
       - name: Smoke-test published binary
         shell: pwsh
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'smoke-out'
 
-          & dist/ZX2ILRecomp.exe --selftest --frames 30 --output $out --no-tui 2>&1 |
+          & dist/ZX2ILRecomp.exe --selftest --frames 30 --output $out --keep --no-tui 2>&1 |
             Tee-Object -Variable log
 
           if ($LASTEXITCODE -ne 0) {
@@ -119,23 +123,67 @@ jobs:
 
           Write-Host 'Published binary runs.'
 
-      - name: Verify the generated game runs
+      # Asserts the artifacts a user would actually find: the launcher, the
+      # generated source, the report and the screenshot the headless run took.
+      # The path must match the --output of the previous step; it is NOT the
+      # default zx_lifted_output, because this job never lifts into the repo.
+      - name: Verify the generated game artifacts
         shell: pwsh
         run: |
-          # The self-test already executed the generated game headlessly; this
-          # step asserts the artifacts are on disk where a user would find them.
-          $exe = 'zx_lifted_output/_selftest/out/loop-48-sna/loop-48-sna.exe'
-          $src = 'zx_lifted_output/_selftest/out/loop-48-sna/src/Game.generated.cs'
-          $rep = 'zx_lifted_output/_selftest/out/loop-48-sna/analysis.txt'
+          $root = Join-Path $env:RUNNER_TEMP 'smoke-out/_selftest/out/loop-48-sna'
 
-          foreach ($file in @($exe, $src, $rep)) {
-            if (-not (Test-Path $file)) {
-              Write-Error "Expected output missing: $file"
-              exit 1
-            }
+          $required = @(
+            "$root/loop-48-sna.exe",
+            "$root/loop-48-sna.dll",
+            "$root/src/Game.generated.cs",
+            "$root/analysis.txt",
+            "$root/frame.png"
+          )
+
+          $bad = @()
+
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { $bad += "$file (missing)"; continue }
+            if ((Get-Item $file).Length -eq 0) { $bad += "$file (empty)" }
+          }
+
+          if ($bad.Count -gt 0) {
+            Write-Error "Expected output missing: $($bad -join ', ')"
+            exit 1
           }
 
           Write-Host 'Lifted game artifacts present.'
+
+      # A uniform screenshot means the ULA decoded nothing. The self-test checks
+      # this too, but asserting it here proves the *published* binary renders,
+      # not just the one built in the build job.
+      - name: Verify the generated game renders
+        shell: pwsh
+        run: |
+          $frame = Join-Path $env:RUNNER_TEMP 'smoke-out/_selftest/out/loop-48-sna/frame.png'
+
+          Add-Type -AssemblyName System.Drawing
+          $image = [System.Drawing.Bitmap]::FromFile($frame)
+
+          try {
+            $colours = @{}
+
+            for ($y = 0; $y -lt $image.Height; $y += 4) {
+              for ($x = 0; $x -lt $image.Width; $x += 4) {
+                $colours[$image.GetPixel($x, $y).ToArgb()] = $true
+              }
+            }
+
+            if ($colours.Count -lt 3) {
+              Write-Error "Screenshot has $($colours.Count) colour(s): the ULA did not render."
+              exit 1
+            }
+
+            Write-Host "Screenshot renders ($($colours.Count) colours)."
+          }
+          finally {
+            $image.Dispose()
+          }
 
       - name: Upload lifter
         uses: actions/upload-artifact@v4

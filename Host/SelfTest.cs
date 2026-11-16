@@ -81,10 +81,17 @@ public sealed class SelfTest
         if (failed == 0 && !_options.KeepTemp)
         {
             Common.FileSystemUtil.TryDeleteDirectory(root);
+            Console.WriteLine("Artifacts removed (use --keep to inspect them): " + root);
         }
         else if (failed == 0)
         {
             Console.WriteLine("Artifacts kept: " + root);
+        }
+        else
+        {
+            // Failures always keep their artifacts, whether or not --keep was
+            // passed: a failing run is exactly when someone needs to look.
+            Console.WriteLine("Artifacts kept for inspection: " + root);
         }
 
         return failed == 0 ? 0 : 2;

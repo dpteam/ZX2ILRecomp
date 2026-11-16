@@ -116,7 +116,116 @@ the same shape of code (one method per statement, `goto` for `GO TO`).
 Tier 1 is achievable and covers type-in games. Tier 2 is expensive but finite.
 Tier 3 is effectively a ROM emulator and should only be attempted on demand.
 
-## Stage 7 — Other ZX machines
+## Stage 7 — Audio in: lifting from a tape recording
+
+The most interesting input the project could accept, and the one that unlocks
+material nothing else can: **recordings**. Old cassettes, YouTube rips,
+someone's phone held next to a 1984 tape deck. There is no `.tzx` for these and
+there never will be — but the data is all there, as sound.
+
+This is not speculative. It is already how a good part of the scene's own
+archive was built: the `__Conv` folder next to the reference collection holds
+MP3s of tape loading and the `.TZX` files somebody converted them into, plus
+`TZX2WAV.EXE` for the opposite direction. The pipeline is proven; it just is not
+part of any recompiler.
+
+```
+   recording.mp3/.wav/.flac
+        │
+        ├─ ffmpeg ──────────────────► mono PCM WAV, 44.1/48 kHz
+        │
+        ├─ pulse extraction ────────► edge timings (samples → µs)
+        │
+        ├─ edge → bit ──────────────► CUTS / SpeedLock / custom loaders
+        │
+        ├─ bit → byte ──────────────► blocks, checksums
+        │
+        ├─ byte → memory ───────────► the same TapeLoader used today
+        │
+        └─ lift ────────────────────► Game.exe
+```
+
+### Stage 7a. Audio → pulses
+
+- [ ] Accept `.wav`, `.flac`, `.mp3`, `.ogg` as input
+- [ ] Decode with ffmpeg when present, fall back to a plain WAV reader so the
+      tool still works without it
+- [ ] Normalise: mono, DC offset removal, optional low-pass, gain to full scale
+- [ ] Hysteresis threshold instead of a single level — cassette recordings have
+      a wandering baseline and a fixed threshold loses whole blocks
+- [ ] Emit a **pulse train** (list of durations in T-states), which is the
+      format every decoder below wants
+
+### Stage 7b. Pulses → bits
+
+The Spectrum encodes bits as two pulses of differing length; which one is longer
+is the bit. Two conventions exist and both must be tried:
+
+| Standard | Short pulse | Long pulse | Bit |
+|---|---|---|---|
+| ROM loader | 855 T | 1710 T | 0 = two short, 1 = two long |
+| Turbo | varies per block | varies per block | same idea, different timings |
+
+- [ ] ROM-loader decoder (the 48K/128K ROM routine timings)
+- [ ] Turbo decoder with per-block timing read from a pilot tone
+- [ ] **Auto-detect the timing** by clustering pulse lengths — this is what makes
+      a recording with no metadata work at all
+- [ ] Tolerate jitter: real tape speed drifts, so compare *ratios*, not absolute
+      durations
+- [ ] Report signal quality (SNR, jitter spread) so a bad recording fails loudly
+      instead of producing plausible garbage
+
+### Stage 7c. Bits → blocks
+
+- [ ] Pilot tone + sync pulse detection to find block boundaries
+- [ ] Flag byte, 8 data bytes, two checksum bytes
+- [ ] **Checksum verification** — a block that fails is a block that must not be
+      lifted. Silently accepting it produces a game that crashes 30 seconds in
+      and looks like a recompiler bug
+- [ ] Block type dispatch: header vs data, program vs CODE vs array
+- [ ] Retry with a different threshold when checksums fail; report how many
+      blocks were recovered
+
+### Stage 7d. Blocks → snapshot
+
+- [ ] Reuse `TapeLoader` verbatim — a decoded recording produces exactly the
+      blocks a `.tap` would
+- [ ] Same entry-point logic (`RANDOMIZE USR n`), same 128K warning
+- [ ] Write a `.tap` next to the output so the decode is reproducible and the
+      user can inspect it in any emulator
+
+### Stage 7e. Custom loaders
+
+The hard part, and the reason this is a stage and not a weekend:
+
+- [ ] **SpeedLock 1-7** — the most common protection; changes timing mid-block
+- [ ] **Alcatraz**, **Bleepload**, **Microsphere**, **Digital Integration**
+- [ ] **Lenslok** — not a loader but a challenge-response screen; needs the
+      key-card lookup, not the audio
+- [ ] Detection by timing signature, then a loader-specific decoder
+- [ ] Unknown signature: emit the pulse train as a `.wav` plus a report, so the
+      user can hand it to an existing tool instead of getting nothing
+
+### Why this is worth it
+
+- Cassette-only releases that were never archived as files
+- Recordings of games whose `.tzx` is lost but whose YouTube upload survives
+- Russian and Eastern European tapes whose loaders were never documented
+- It makes the recompiler the *only* tool that goes from "a sound file" to
+  "a playable .NET game", which is a genuinely new capability rather than a
+  faster path to the same place
+
+### Non-goals
+
+- Perfect archival accuracy. The output is a playable game, not a
+  preservation-grade `.tzx`.
+- Real-time decoding. This is an offline batch step, seconds per file is fine.
+- Analog artefacts. Hiss, dropouts and wow/flutter are handled by tolerance and
+  retries, not by modelling the tape deck.
+
+---
+
+## Stage 8 — Other ZX machines
 
 Each of these is a different CPU or a different memory map, not a flag.
 
@@ -148,7 +257,7 @@ Each of these is a different CPU or a different memory map, not a flag.
 - [ ] `.sad` container
 - [ ] Its own video modes (MODE 4 is Spectrum-like, the rest are not)
 
-## Stage 8 — Beyond
+## Stage 9 — Beyond
 
 - [ ] **`.scr`/`.tap` screenshots as visual regression tests.** Compare a lifted
       game's frame N against a reference capture, so correctness is measured and

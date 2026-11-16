@@ -447,3 +447,8 @@ $RECYCLE.BIN/
 # never be committed. CI uses the synthetic snapshots from --selftest instead.
 roms/
 testdata/
+
+# Demo recompilations (tools/demo.ps1). These are builds of copyrighted games,
+# so only the script that produces them is committed.
+bin/recompiled/
+recompiled/
