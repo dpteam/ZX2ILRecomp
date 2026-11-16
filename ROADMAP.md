@@ -28,6 +28,14 @@ Legend: `[x]` done · `[~]` partial · `[ ]` planned
 - [x] **Entry point from the BASIC loader** (`RANDOMIZE USR n`), in both number
       encodings found in real tapes. Without this a commercial tape starts at
       its load address — which is data — and the game sits there doing nothing
+- [x] **Both CODE header conventions.** Multi-stage loaders store the load
+      address first; the loader decides with three tests — does the block fit in
+      64K, does it cover the entry point, and do the addresses look like load
+      addresses (this is what fixed Atic Atac *and* Jet Set Willy)
+- [x] **Ignored `DD`/`FD` prefixes** decode as the base instruction, so a
+      `DD 00` NOP no longer reaches the interpreter as an unknown opcode
+- [x] **Unheadered data blocks** are reported instead of silently producing a
+      game that hangs in a field of `NOP`s
 - [x] Bank-oriented memory model, correct 5/2/0 48K slice numbering
 - [x] Port `0x7FFD` paging including the lock bit and both screens
 - [x] ROM discovery next to the snapshot, plus a minimal pseudo-ROM fallback
@@ -52,6 +60,11 @@ Legend: `[x]` done · `[~]` partial · `[ ]` planned
 - [x] Interpreter fallback for `DD`/`FD` and computed targets
 - [x] Opcode geometry tables serialised into the output
 - [x] Readable output: annotated mnemonics, indentation, no wall of `goto`
+- [x] **Reachability pruning.** Only code reachable by real control flow earns
+      a method; swept data tables stay with the interpreter (95% pruned on a
+      typical 48K game)
+- [x] **One method per basic block**, not per instruction: 3 100 methods instead
+      of 37 000, 9.6 s to lift and compile instead of 139 s
 
 ## Stage 4 — Runtime (done)
 
@@ -103,6 +116,10 @@ opened today.
       address space; only the plain 128K layout is handled.
 - [ ] **128K tape recovery.** Needs the loader emulated, not parsed: a 128K game
       pages banks in itself, and a tape only records addresses.
+- [ ] **Tapes with unheadered data blocks.** Dizzy II ships one header and five
+      raw blocks, with a BASIC loader that `POKE`s the entry point before
+      calling it. Detected and reported today; recovering them needs the tape
+      loader executed rather than parsed.
 
 ### 6d. BASIC as a second front end
 

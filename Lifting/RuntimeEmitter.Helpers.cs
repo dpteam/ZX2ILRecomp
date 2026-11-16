@@ -357,7 +357,15 @@ internal static partial class RuntimeEmitter
         w.Line("    InterruptPending = true;");
         w.Line("    Frames++;");
         w.Line("}");
-        w.Line("if ((InsCount & 4095) == 0) Throttle();");
+        w.Blank();
+        w.Line("// A threshold, not a mask: InsCount advances by a whole block at a");
+        w.Line("// time, so (InsCount & 4095) == 0 would usually never be true.");
+        w.Line("if (InsCount >= _nextThrottleCheck)");
+        w.Line("{");
+        w.Line("    _nextThrottleCheck = InsCount + 4096;");
+        w.Line("    Throttle();");
+        w.Line("}");
+        w.Blank();
         w.Line("if (!InterruptPending || !IFF1) return false;");
         w.Line("InterruptPending = false;");
         w.Line("Halted = false;");

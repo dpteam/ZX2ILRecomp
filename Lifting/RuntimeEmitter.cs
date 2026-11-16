@@ -66,6 +66,7 @@ internal static partial class RuntimeEmitter
 
         w.Line("// Execution counters and diagnostics.");
         w.Line("public static long InsCount;");
+        w.Line("static long _nextThrottleCheck;");
         w.Line("public static ushort LastPC;");
         w.Line("public static ushort DispatchTarget;");
         w.Line("public static string LastError;");
@@ -201,7 +202,6 @@ internal static partial class RuntimeEmitter
         w.Open("while (true)");
         w.Line("if (FrameLimit > 0 && Frames >= FrameLimit) { CpuState = \"Done\"; return; }");
         w.Line("LastPC = pc;");
-        w.Line("InsCount++;");
         w.Line("if (CheckInterrupt(pc)) pc = DispatchTarget;");
         w.Line("else pc = StepStatic(pc);");
         w.Close();
@@ -212,12 +212,14 @@ internal static partial class RuntimeEmitter
         w.Close();
         w.Blank();
 
-        // Group labels per 256-byte page so the dispatch switch stays small.
+        // Group block starts per 256-byte page so the dispatch switch stays
+        // small. Only block starts appear here: an address inside a block is
+        // reachable only by falling into it, never by a jump.
         SortedDictionary<int, List<ushort>> pages = new();
 
-        foreach (ushort address in ctx.Labels)
+        foreach (BasicBlocks.Block block in ctx.Blocks)
         {
-            int page = address >> 8;
+            int page = block.Start >> 8;
 
             if (!pages.TryGetValue(page, out List<ushort>? list))
             {
@@ -225,7 +227,7 @@ internal static partial class RuntimeEmitter
                 pages[page] = list;
             }
 
-            list.Add(address);
+            list.Add(block.Start);
         }
 
         w.Open("static ushort StepStatic(ushort pc)");
@@ -242,6 +244,7 @@ internal static partial class RuntimeEmitter
         w.Blank();
 
         w.Open("static ushort StepDynamic(ushort pc)");
+        w.Line("InsCount++;   // one interpreted instruction");
         w.Line("DispatchTarget = pc;");
         w.Line("if (!ExecDynamicOne(DispatchTarget))");
         w.Line("{");
@@ -258,10 +261,10 @@ internal static partial class RuntimeEmitter
             w.Open("static ushort StepPage" + suffix + "(ushort pc)");
             w.Open("switch (pc)");
 
-            foreach (ushort address in page.Value)
+            foreach (ushort start in page.Value)
             {
-                w.Line("case 0x" + address.ToString("X4", CultureInfo.InvariantCulture) + ": return L" +
-                       address.ToString("X4", CultureInfo.InvariantCulture) + "();");
+                w.Line("case 0x" + start.ToString("X4", CultureInfo.InvariantCulture) + ": return B" +
+                       start.ToString("X4", CultureInfo.InvariantCulture) + "();");
             }
 
             w.Line("default: return StepDynamic(pc);");
@@ -270,19 +273,43 @@ internal static partial class RuntimeEmitter
             w.Blank();
         }
 
-        foreach (ushort address in ctx.Labels)
+        // One method per basic block. Instructions inside a block are emitted
+        // inline: no dispatch, no method call, no literal address return between
+        // them, which is both smaller to compile and faster to execute.
+        foreach (BasicBlocks.Block block in ctx.Blocks)
         {
-            w.Open("static ushort L" + address.ToString("X4", CultureInfo.InvariantCulture) + "()");
+            w.Open("static ushort B" + block.Start.ToString("X4", CultureInfo.InvariantCulture) + "()");
 
-            if (ctx.Model.Instructions.TryGetValue(address, out InstructionZ80? inst))
+            // Count instructions, not dispatches. With one method per block the
+            // two differ by ~5x, and a counter that silently means "blocks"
+            // would make every report and every throttle interval wrong.
+            w.Line("InsCount += " + block.Addresses.Count.ToString(CultureInfo.InvariantCulture) + ";");
+
+            for (int i = 0; i < block.Addresses.Count; i++)
             {
-                w.Line("// " + inst.Text);
-                EmitInstruction(w, inst);
-            }
-            else
-            {
-                w.Line("Trap(\"Label without a decoded instruction.\");");
-                w.Line("return 0;");
+                ushort address = block.Addresses[i];
+                bool last = i == block.Addresses.Count - 1;
+
+                if (!ctx.Model.Instructions.TryGetValue(address, out InstructionZ80? inst))
+                {
+                    w.Line("Trap(\"Block address without a decoded instruction.\");");
+                    w.Line("return 0;");
+                    break;
+                }
+
+                w.Line("// " + address.ToString("X4", CultureInfo.InvariantCulture) + "  " + inst.Text);
+
+                if (last)
+                {
+                    // The block's last instruction owns the return.
+                    EmitInstruction(w, inst);
+                }
+                else
+                {
+                    // Interior instructions always fall through, so their effect
+                    // is emitted without a return statement.
+                    EmitInstructionBody(w, inst);
+                }
             }
 
             w.Close();

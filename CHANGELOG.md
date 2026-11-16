@@ -51,6 +51,14 @@ dependencies, verifiable lifts, CI that runs the result.
   address, which for a commercial release is data. The loader now reads
   `RANDOMIZE USR n` out of the tokenised BASIC loader, in both number encodings
   found in real tapes. This is what makes Manic Miner actually play.
+- **Tape header convention.** Multi-stage loaders store the *load* address in
+  parameter 1, not parameter 2. Placing Atic Atac's blocks by parameter 2 left
+  its entry point (`0x5B80`) empty and the game rendered coloured garbage. The
+  convention is now chosen by three tests: does the block fit in 64K, does it
+  cover the entry point, and do the addresses look like load addresses.
+  Jet Set Willy needed all three — its 32K block is covered by both conventions,
+  and only the overflow test distinguishes them (`0x7FFE` fits, `0x80FB` does
+  not).
 - **Pseudo-ROM never re-enabled interrupts.** The IM 1 handler ended with `RET`
   instead of `EI; RET`, so after the first interrupt `IFF1` stayed clear and the
   game sat in `HALT` forever.
@@ -65,6 +73,18 @@ dependencies, verifiable lifts, CI that runs the result.
 - **`ExecCB` was emitted as `ExecCb`** while callers used `ExecCB`. The
   self-test missed it because its synthetic program had no `CB` opcode; it now
   exercises `CB`, `ED`, `DD` and `FD CB`.
+- **`DD`/`FD` before a non-index instruction was treated as unsupported.** The
+  CPU ignores such a prefix — `DD 00` is a `NOP` with an extra byte and four
+  extra T-states. Decoding it as unsupported sent it to the interpreter, which
+  reported `Unknown opcode $00` and trapped. Dizzy II does exactly this at
+  `0x809C`. The base instruction is now decoded with the prefix's length and
+  timing accounted for, and relative branch targets stay correct.
+- **Tapes with unheadered data blocks** are reported instead of silently
+  producing a game that runs into a field of `NOP`s and hangs.
+- **Relocating loaders are detected.** Batty uses Elite's Uni-Loader: its entry
+  point (`0xFCF1`) is outside every loaded block, because the loader computes
+  the address and moves the code there. The lift now warns that it starts on
+  uninitialised memory instead of reporting success.
 - **SZX `RAMP` page number.** The page is at `+0`, not `+1`; the flags byte was
   being read as the bank, so every page landed one bank off.
 - **128K `GetFlat` for a 48K snapshot.** Model and paging were compared in a way
@@ -80,6 +100,22 @@ dependencies, verifiable lifts, CI that runs the result.
   so `Close()` bound to nothing.
 - **Program class nesting.** The generated `Program` class was never closed,
   leaving the namespace unbalanced.
+
+### Performance
+
+- **One method per basic block instead of per instruction.** A 48K game went
+  from 37 000 methods / 7.2 MB of C# / 139 s to 3 100 methods / 3.2 MB / 9.6 s,
+  with identical behaviour. The C# compiler, not the lifter, was the
+  bottleneck, and the same change removes most dispatch round-trips at run time.
+- **Reachability is a real fixed point.** Only targets of instructions that are
+  themselves reachable are followed, so swept garbage no longer pulls the whole
+  address space in. On Arkanoid: 47 032 of 49 322 decoded addresses pruned,
+  0.57 MB of C# instead of 3.4 MB, same 4 335 630 instructions executed.
+- **`InsCount` counts instructions again**, not dispatches. With one method per
+  block the two differ by ~5x, and a counter that silently meant "blocks" would
+  make every report and every throttle interval wrong.
+- **The throttle check is a threshold, not a mask.** `(InsCount & 4095) == 0`
+  is almost never true once the counter advances by a whole block at a time.
 
 ### Changed
 

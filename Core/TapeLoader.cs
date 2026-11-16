@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text;
 
 namespace ZX2ILRecomp.Core;
 
@@ -21,12 +20,15 @@ namespace ZX2ILRecomp.Core;
 ///
 /// The load address is 0x8000, but the game actually starts at 0x8400 — the
 /// first 1K is data tables. Starting at the load address runs the data, which
-/// looks like "it loads and then does nothing". So the loader:
+/// looks like "it loads and then does nothing".
 ///
-/// 1. scans the BASIC program block for <c>RANDOMIZE USR n</c> and uses <c>n</c>;
-/// 2. falls back to a CODE block's start address (parameter 1);
-/// 3. then to its load address (parameter 2);
-/// 4. then to 0x8000.
+/// So blocks are collected first and placed afterwards, because two things can
+/// only be decided once the whole tape has been read:
+///
+/// * **which header field is the load address** — real files disagree, see
+///   <see cref="PlaceBlocks"/>;
+/// * **where the entry point is** — it comes from the BASIC loader, and that
+///   program may appear before or after the code it launches.
 /// </summary>
 public static class TapeLoader
 {
@@ -42,57 +44,41 @@ public static class TapeLoader
     /// <summary>Header type 0: a BASIC program.</summary>
     private const byte HeaderProgram = 0;
 
+    /// <summary>
+    /// Marks a data block that arrived with no header in front of it. Its load
+    /// address is decided by the game's own loader at run time, so it cannot be
+    /// placed statically.
+    /// </summary>
+    private const byte Unheadered = 0xFF;
+
+    /// <summary>One data block plus the header that described it.</summary>
+    private sealed record DataBlock(byte[] Bytes, int Offset, int Length, byte Type, int Param1, int Param2);
+
     /// <summary>Accumulates what a tape tells us about its entry point.</summary>
     private sealed class EntryCandidates
     {
         /// <summary>From <c>RANDOMIZE USR n</c> in the BASIC loader. Best signal.</summary>
         public ushort? BasicUsr;
 
-        /// <summary>CODE block start address (parameter 1).</summary>
-        public ushort? CodeStart;
+        /// <summary>
+        /// True when the tape's CODE headers turned out to store the load
+        /// address first, contrary to the ROM's own order.
+        /// </summary>
+        public bool UsedSwappedConvention;
 
-        /// <summary>CODE block load address (parameter 2).</summary>
-        public ushort? CodeLoad;
+        /// <summary>True when the tape carries a BASIC program block.</summary>
+        public bool HasBasicProgram;
+
+        /// <summary>
+        /// True when the resolved entry point lies inside a block that was
+        /// actually placed in memory.
+        /// </summary>
+        public bool CoveredByBlock;
+
 
         public ushort Resolve()
         {
-            if (BasicUsr is ushort usr && usr >= 0x4000)
-            {
-                return usr;
-            }
-
-            if (CodeStart is ushort start && start >= 0x4000)
-            {
-                return start;
-            }
-
-            if (CodeLoad is ushort load && load >= 0x4000)
-            {
-                return load;
-            }
-
-            return 0x8000;
-        }
-
-        /// <summary>Which candidate won, for the analysis report.</summary>
-        public string Describe(ushort resolved)
-        {
-            if (BasicUsr is ushort usr && usr == resolved)
-            {
-                return "BASIC RANDOMIZE USR " + usr.ToString(CultureInfo.InvariantCulture);
-            }
-
-            if (CodeStart is ushort start && start == resolved)
-            {
-                return "CODE block start address";
-            }
-
-            if (CodeLoad is ushort load && load == resolved)
-            {
-                return "CODE block load address";
-            }
-
-            return "default 0x8000";
+            return BasicUsr is ushort usr && usr >= 0x4000 ? usr : (ushort)0x8000;
         }
     }
 
@@ -102,20 +88,19 @@ public static class TapeLoader
 
     public static ZxSnapshot LoadTap(byte[] data)
     {
-        ZxSnapshot snapshot = new()
-        {
-            Model = (int)SpectrumModel.Zx48
-        };
-
-        byte[] flat = new byte[65536];
+        List<DataBlock> blocks = new();
         EntryCandidates entry = new();
-        int pendingStart = -1;
-        int pendingLength = -1;
         int position = 0;
+
+        // Header of the block the next data block belongs to.
+        byte pendingType = 0;
+        int pendingLength = -1;
+        int pendingParam1 = 0;
+        int pendingParam2 = 0;
 
         while (position + 2 <= data.Length)
         {
-            int blockLength = (data[position] | (data[position + 1] << 8));
+            int blockLength = data[position] | (data[position + 1] << 8);
             position += 2;
 
             if (blockLength <= 0 || position + blockLength > data.Length)
@@ -127,20 +112,28 @@ public static class TapeLoader
 
             if (flag == 0x00 && blockLength >= 19)
             {
-                byte[] header = new byte[blockLength];
-                Array.Copy(data, position, header, 0, blockLength);
-                ApplyHeader(header, entry, ref pendingStart, ref pendingLength);
+                ReadHeader(data, position, blockLength, out pendingType, out pendingLength, out pendingParam1, out pendingParam2);
             }
-            else if (flag == 0xFF && pendingStart >= 0)
+            else if (flag == 0xFF)
             {
-                CopyBlock(data, position + 1, blockLength - 2, pendingStart, pendingLength, flat, entry);
-                pendingStart = -1;
+                if (pendingLength >= 0)
+                {
+                    blocks.Add(new DataBlock(data, position + 1, blockLength - 2, pendingType, pendingParam1, pendingParam2));
+                    pendingLength = -1;
+                }
+                else
+                {
+                    // A data block with no header in front of it. The game's own
+                    // loader decides where these go, so they are recorded as
+                    // unheadered rather than dropped silently.
+                    blocks.Add(new DataBlock(data, position + 1, blockLength - 2, Unheadered, 0, 0));
+                }
             }
 
             position += blockLength;
         }
 
-        return Finish(snapshot, flat, entry, "TAP");
+        return Finish(blocks, entry, "TAP");
     }
 
     // -----------------------------------------------------------------
@@ -149,20 +142,18 @@ public static class TapeLoader
 
     public static ZxSnapshot LoadTzx(byte[] data)
     {
-        ZxSnapshot snapshot = new()
-        {
-            Model = (int)SpectrumModel.Zx48
-        };
-
         if (data.Length < 10)
         {
             throw new InvalidDataException("TZX file too short.");
         }
 
-        byte[] flat = new byte[65536];
+        List<DataBlock> blocks = new();
         EntryCandidates entry = new();
-        int pendingStart = -1;
+
+        byte pendingType = 0;
         int pendingLength = -1;
+        int pendingParam1 = 0;
+        int pendingParam2 = 0;
 
         // "ZXTape!" 0x1A major minor — 10 bytes.
         int position = 10;
@@ -184,7 +175,7 @@ public static class TapeLoader
 
                         if (position + headerSize > data.Length)
                         {
-                            return Finish(snapshot, flat, entry, "TZX");
+                            return Finish(blocks, entry, "TZX");
                         }
 
                         total = id == 0x10
@@ -195,23 +186,27 @@ public static class TapeLoader
 
                         if (total < 0 || position + total > data.Length)
                         {
-                            return Finish(snapshot, flat, entry, "TZX");
+                            return Finish(blocks, entry, "TZX");
                         }
 
-                        byte[] block = new byte[total];
-                        Array.Copy(data, position, block, 0, total);
+                        if (total > 0 && data[position] == 0x00 && total >= 19)
+                        {
+                            ReadHeader(data, position, total, out pendingType, out pendingLength, out pendingParam1, out pendingParam2);
+                        }
+                        else if (total > 0 && data[position] == 0xFF)
+                        {
+                            if (pendingLength >= 0)
+                            {
+                                blocks.Add(new DataBlock(data, position + 1, total - 2, pendingType, pendingParam1, pendingParam2));
+                                pendingLength = -1;
+                            }
+                            else
+                            {
+                                blocks.Add(new DataBlock(data, position + 1, total - 2, Unheadered, 0, 0));
+                            }
+                        }
+
                         position += total;
-
-                        if (block.Length > 0 && block[0] == 0x00 && block.Length >= 19)
-                        {
-                            ApplyHeader(block, entry, ref pendingStart, ref pendingLength);
-                        }
-                        else if (block.Length > 0 && block[0] == 0xFF && pendingStart >= 0)
-                        {
-                            CopyBlock(block, 1, block.Length - 2, pendingStart, pendingLength, flat, entry);
-                            pendingStart = -1;
-                        }
-
                         break;
                     }
 
@@ -222,7 +217,7 @@ public static class TapeLoader
                 case 0x13: // pulse sequence
                     if (position + 1 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     count = data[position];
@@ -233,7 +228,7 @@ public static class TapeLoader
                     {
                         if (position + 10 > data.Length)
                         {
-                            return Finish(snapshot, flat, entry, "TZX");
+                            return Finish(blocks, entry, "TZX");
                         }
 
                         total = data[position + 7] | (data[position + 8] << 8) | (data[position + 9] << 16);
@@ -241,13 +236,13 @@ public static class TapeLoader
 
                         if (total < 0 || position + total > data.Length)
                         {
-                            return Finish(snapshot, flat, entry, "TZX");
+                            return Finish(blocks, entry, "TZX");
                         }
 
-                        if (pendingStart >= 0)
+                        if (pendingLength >= 0)
                         {
-                            CopyBlock(data, position, total, pendingStart, pendingLength, flat, entry);
-                            pendingStart = -1;
+                            blocks.Add(new DataBlock(data, position, total, pendingType, pendingParam1, pendingParam2));
+                            pendingLength = -1;
                         }
                         else
                         {
@@ -261,7 +256,7 @@ public static class TapeLoader
                 case 0x15: // direct recording (audio, not memory)
                     if (position + 8 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     total = data[position + 4] | (data[position + 5] << 8) | (data[position + 6] << 16);
@@ -273,7 +268,7 @@ public static class TapeLoader
                 case 0x19: // generalized data
                     if (position + 4 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     total = BitConverter.ToInt32(data, position);
@@ -287,7 +282,7 @@ public static class TapeLoader
                 case 0x21: // group start
                     if (position + 1 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     count = data[position];
@@ -308,7 +303,7 @@ public static class TapeLoader
                 case 0x26: // call sequence
                     if (position + 2 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     count = data[position] | (data[position + 1] << 8);
@@ -321,7 +316,7 @@ public static class TapeLoader
                 case 0x28: // select block
                     if (position + 2 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     count = data[position] | (data[position + 1] << 8);
@@ -339,7 +334,7 @@ public static class TapeLoader
                 case 0x30: // text description
                     if (position + 1 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     count = data[position];
@@ -349,7 +344,7 @@ public static class TapeLoader
                 case 0x31: // message block
                     if (position + 2 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     count = data[position + 1];
@@ -359,7 +354,7 @@ public static class TapeLoader
                 case 0x32: // archive info
                     if (position + 2 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     count = data[position] | (data[position + 1] << 8);
@@ -369,7 +364,7 @@ public static class TapeLoader
                 case 0x33: // hardware type
                     if (position + 1 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     count = data[position];
@@ -379,7 +374,7 @@ public static class TapeLoader
                 case 0x35: // custom info
                     if (position + 20 > data.Length)
                     {
-                        return Finish(snapshot, flat, entry, "TZX");
+                        return Finish(blocks, entry, "TZX");
                     }
 
                     total = BitConverter.ToInt32(data, position + 16);
@@ -396,7 +391,7 @@ public static class TapeLoader
                         "TZX unknown block id 0x{0:X2} at offset {1}; stopping parse.",
                         id,
                         position - 1));
-                    return Finish(snapshot, flat, entry, "TZX");
+                    return Finish(blocks, entry, "TZX");
             }
 
             if (position < 0 || position > data.Length)
@@ -405,91 +400,200 @@ public static class TapeLoader
             }
         }
 
-        return Finish(snapshot, flat, entry, "TZX");
+        return Finish(blocks, entry, "TZX");
     }
 
     // -----------------------------------------------------------------
-    // Shared block handling
+    // Header and placement
     // -----------------------------------------------------------------
 
-    /// <summary>
-    /// Interprets a 19-byte tape header: records where the following data block
-    /// goes and, for a BASIC program, mines the entry point out of it.
-    /// </summary>
-    private static void ApplyHeader(
-        byte[] header,
-        EntryCandidates entry,
-        ref int pendingStart,
-        ref int pendingLength)
+    /// <summary>Reads the 17-byte payload of a tape header.</summary>
+    private static void ReadHeader(
+        byte[] data,
+        int offset,
+        int available,
+        out byte type,
+        out int declaredLength,
+        out int param1,
+        out int param2)
     {
-        if (header.Length < 19)
+        type = 0;
+        declaredLength = 0;
+        param1 = 0;
+        param2 = 0;
+
+        if (available < 19)
         {
-            pendingStart = -1;
+            declaredLength = -1;
             return;
         }
 
-        byte type = header[1];
-        int declaredLength = header[12] | (header[13] << 8);
-        int param1 = header[14] | (header[15] << 8);
-        int param2 = header[16] | (header[17] << 8);
-
-        switch (type)
-        {
-            case HeaderCode:
-                pendingStart = param2;
-                pendingLength = declaredLength;
-
-                // Parameter 1 is the auto-run address; parameter 2 is where the
-                // bytes go. They differ more often than not.
-                entry.CodeStart ??= param1 >= 0x4000 ? (ushort)param1 : null;
-                entry.CodeLoad ??= param2 >= 0x4000 ? (ushort)param2 : null;
-                break;
-
-            case HeaderProgram:
-                // A BASIC program always loads at 0x8000, behind the variables.
-                pendingStart = 0x8000;
-                pendingLength = declaredLength;
-                break;
-
-            default:
-                pendingStart = -1;
-                break;
-        }
+        type = data[offset + 1];
+        declaredLength = data[offset + 12] | (data[offset + 13] << 8);
+        param1 = data[offset + 14] | (data[offset + 15] << 8);
+        param2 = data[offset + 16] | (data[offset + 17] << 8);
     }
 
     /// <summary>
-    /// Copies a data block into the flat 64K image and, when it is a BASIC
-    /// program, looks for the auto-start address inside it.
+    /// Places every collected block into a flat 64K image.
+    ///
+    /// The one genuinely ambiguous thing in a tape header is which of the two
+    /// CODE parameters is the load address. The ROM saves "start, load", and
+    /// several tape-to-TZX converters emit "load, start". A single-block game
+    /// hides the difference; a multi-stage loader does not.
+    ///
+    /// Two worked examples, and they disagree:
+    ///
+    /// * Atic Atac: <c>p1 = 0x5B80, p2 = 0x8000</c>, loader calls
+    ///   <c>USR 0x5B80</c>. Only <c>p1</c> covers the entry point.
+    /// * Jet Set Willy: <c>p1 = 0x7FFE, p2 = 0x80FB</c>, loader calls
+    ///   <c>USR 0x8400</c>. **Both** cover it, because the block is 32K long —
+    ///   so "which one covers the entry" cannot decide.
+    ///
+    /// The tie-breaker is block alignment. A load address is where a block
+    /// starts in memory and is almost always a round number: `0x8000`, `0x4000`,
+    /// `0x6000`. A start address is a jump target and is arbitrary: `0x80FB`.
+    /// Jet Set Willy's real load address is `0x7FFE`, one byte below `0x8000`,
+    /// because the block begins with two bytes of length prefix.
+    ///
+    /// So: prefer the convention whose addresses look like load addresses, and
+    /// fall back to "covers the entry point" when neither is convincing.
     /// </summary>
-    private static void CopyBlock(
-        byte[] source,
-        int offset,
-        int length,
-        int start,
-        int declaredLength,
-        byte[] flat,
-        EntryCandidates entry)
+    private static byte[] PlaceBlocks(List<DataBlock> blocks, EntryCandidates entry)
     {
-        int copy = Math.Min(length, declaredLength);
+        byte[] flat = new byte[65536];
 
-        for (int i = 0; i < copy; i++)
+        if (blocks.Count == 0)
         {
-            int address = start + i;
+            return flat;
+        }
 
-            if (address is >= 0x4000 and < 0x10000 && offset + i < source.Length)
+        // The BASIC program has to be in place before the entry point can be
+        // read out of it, and its own address is not in dispute.
+        foreach (DataBlock block in blocks)
+        {
+            if (block.Type == HeaderProgram)
             {
-                flat[address] = source[offset + i];
+                entry.HasBasicProgram = true;
+                CopyBlock(block, 0x8000, flat, entry);
             }
         }
 
-        // A BASIC program lands at 0x8000, so it can be scanned in place as
-        // soon as it has been copied in.
-        if (start == 0x8000 && copy >= 9)
+        ushort wanted = entry.Resolve();
+        bool param1IsLoad = ChooseConvention(blocks, wanted);
+        entry.UsedSwappedConvention = param1IsLoad;
+
+        entry.CoveredByBlock = blocks.Any(b => b.Type == HeaderCode && Covers(b, wanted, param1IsLoad));
+
+        foreach (DataBlock block in blocks)
         {
-            if (TryFindBasicUsr(flat, copy, out ushort usr))
+            if (block.Type == HeaderProgram)
             {
-                entry.BasicUsr ??= usr;
+                continue;
             }
+
+            if (block.Type != HeaderCode)
+            {
+                // Arrays and other types are not code; skip them rather than
+                // splattering them into the address space.
+                continue;
+            }
+
+            int start = param1IsLoad ? block.Param1 : block.Param2;
+
+            if (start is >= 0x4000 and <= 0xFFFF)
+            {
+                CopyBlock(block, start, flat, entry);
+            }
+        }
+
+        return flat;
+    }
+
+    /// <summary>
+    /// Decides which header field is the load address. See <see cref="PlaceBlocks"/>.
+    /// </summary>
+    private static bool ChooseConvention(List<DataBlock> blocks, ushort entryPoint)
+    {
+        List<DataBlock> code = blocks.Where(b => b.Type == HeaderCode).ToList();
+
+        if (code.Count == 0)
+        {
+            return false;
+        }
+
+        // 1. A load address must let the block fit in the 64K address space.
+        //    Jet Set Willy's 32K block fits at 0x7FFE and overflows at 0x80FB.
+        int p1Overflow = code.Count(b => b.Param1 + b.Length > 0x10000);
+        int p2Overflow = code.Count(b => b.Param2 + b.Length > 0x10000);
+
+        if (p1Overflow != p2Overflow)
+        {
+            return p1Overflow < p2Overflow;
+        }
+
+        // 2. Only one convention puts the entry point inside a block.
+        bool p1Covers = code.Any(b => Covers(b, entryPoint, param1IsLoad: true));
+        bool p2Covers = code.Any(b => Covers(b, entryPoint, param1IsLoad: false));
+
+        if (p1Covers != p2Covers)
+        {
+            return p1Covers;
+        }
+
+        // 3. Both or neither: prefer the addresses that look like load
+        //    addresses, which start on a round boundary.
+        int p1Score = code.Sum(b => Alignment(b.Param1));
+        int p2Score = code.Sum(b => Alignment(b.Param2));
+
+        return p1Score > p2Score;
+    }
+
+    /// <summary>
+    /// How much an address looks like a load address rather than a jump target.
+    ///
+    /// A block starts where the loader put it: `0x8000`, `0x4000`, `0x5B00`.
+    /// A start address is wherever the code happens to begin, which is usually
+    /// mid-page. `0x7FFE` scores 2 (256-byte aligned); `0x80FB` scores 0.
+    /// </summary>
+    private static int Alignment(int address)
+    {
+        if ((address & 0xFF) == 0)
+        {
+            return 4;
+        }
+
+        if ((address & 0x0F) == 0)
+        {
+            return 2;
+        }
+
+        return (address & 0x03) == 0 ? 1 : 0;
+    }
+
+    private static bool Covers(DataBlock block, ushort address, bool param1IsLoad)
+    {
+        int start = param1IsLoad ? block.Param1 : block.Param2;
+        return address >= start && address < start + block.Length;
+    }
+
+    /// <summary>Copies one block into the flat image at <paramref name="start"/>.</summary>
+    private static void CopyBlock(DataBlock block, int start, byte[] flat, EntryCandidates entry)
+    {
+        for (int i = 0; i < block.Length; i++)
+        {
+            int address = start + i;
+
+            if (address is >= 0x4000 and < 0x10000 && block.Offset + i < block.Bytes.Length)
+            {
+                flat[address] = block.Bytes[block.Offset + i];
+            }
+        }
+
+        // A BASIC program lands at 0x8000, so it can be scanned in place.
+        if (start == 0x8000 && block.Length >= 9 && TryFindBasicUsr(flat, block.Length, out ushort usr))
+        {
+            entry.BasicUsr ??= usr;
         }
     }
 
@@ -572,8 +676,15 @@ public static class TapeLoader
         return true;
     }
 
-    private static ZxSnapshot Finish(ZxSnapshot snapshot, byte[] flat, EntryCandidates entry, string format)
+    private static ZxSnapshot Finish(List<DataBlock> blocks, EntryCandidates entry, string format)
     {
+        byte[] flat = PlaceBlocks(blocks, entry);
+
+        ZxSnapshot snapshot = new()
+        {
+            Model = (int)SpectrumModel.Zx48
+        };
+
         ushort resolved = entry.Resolve();
 
         snapshot.SetFlatRam(flat);
@@ -586,12 +697,111 @@ public static class TapeLoader
             snapshot.Notes.Add("Entry point from the BASIC loader: RANDOMIZE USR " +
                                usr.ToString(CultureInfo.InvariantCulture));
         }
+        else if (entry.HasBasicProgram && !entry.CoveredByBlock)
+        {
+            // A BASIC loader exists, its USR address is computed rather than a
+            // literal, and the guess is not even inside a loaded block. Batty
+            // is the example: Elite's Uni-Loader builds the address from PEEKs
+            // and moves the payload there before jumping.
+            //
+            // Saying so is the difference between a user debugging their
+            // snapshot and a user filing a bug about a recompiler that
+            // "silently does nothing".
+            Log.Warn(string.Format(
+                CultureInfo.InvariantCulture,
+                "BASIC loader computes its USR address and 0x{0:X4} is not inside any loaded " +
+                "block: this tape relocates its code at run time.",
+                resolved));
+
+            snapshot.Notes.Add("Entry point guessed and outside every loaded block: relocating loader");
+        }
+        else if (entry.HasBasicProgram)
+        {
+            snapshot.Notes.Add("Entry point guessed from a CODE block; the BASIC loader computes its USR address");
+        }
         else
         {
-            snapshot.Notes.Add("Entry point from " + entry.Describe(resolved) + "; no BASIC loader found");
+            snapshot.Notes.Add("No BASIC loader found; assuming 0x8000");
         }
 
-        snapshot.Notes.Add(format + " is a tape image: memory only, no registers");
+        if (entry.UsedSwappedConvention)
+        {
+            snapshot.Notes.Add("CODE headers use load,start order; placed by parameter 1");
+        }
+
+        snapshot.Notes.Add(string.Format(
+            CultureInfo.InvariantCulture,
+            "{0}: {1} data block(s) recovered; a tape carries no registers",
+            format,
+            blocks.Count));
+
+        // A tape whose data blocks have no headers is loaded by the game's own
+        // routine: the addresses are computed at run time, so static placement
+        // cannot be right. Dizzy II is the example — one header, five raw data
+        // blocks, and a BASIC loader that POKEs the entry point before calling
+        // it.
+        int unheaded = blocks.Count(b => b.Type == Unheadered);
+
+        if (unheaded > 0)
+        {
+            Log.Warn(string.Format(
+                CultureInfo.InvariantCulture,
+                "{0} of {1} data blocks carry no header: this tape is loaded by the game's " +
+                "own routine, so their addresses cannot be recovered statically.",
+                unheaded,
+                blocks.Count));
+
+            snapshot.Notes.Add(string.Format(
+                CultureInfo.InvariantCulture,
+                "{0} unheadered data block(s): loaded by the game's own routine, addresses unknown",
+                unheaded));
+        }
+
+        // The entry point must contain something. A relocating loader (Elite's
+        // Uni-Loader, used by Batty) computes the address at run time and moves
+        // the payload there, so the lift starts on uninitialised memory and the
+        // game hangs in a field of NOPs.
+        //
+        // Testing the bytes rather than block coverage is deliberate: block
+        // coverage depends on the header convention guess, and a wrong guess
+        // there is already reported separately. Uniform bytes are the actual
+        // symptom a user sees.
+        if (IsUniform(flat, resolved, 64))
+        {
+            Log.Warn(string.Format(
+                CultureInfo.InvariantCulture,
+                "Entry point 0x{0:X4} contains uniform bytes: this tape relocates or generates " +
+                "its code at run time, so the lift starts on uninitialised memory.",
+                resolved));
+
+            snapshot.Notes.Add("Entry point holds uniform bytes: relocating loader, lift is incomplete");
+        }
+
         return snapshot;
+    }
+
+    /// <summary>
+    /// True when the first <paramref name="length"/> bytes at
+    /// <paramref name="address"/> are all identical. Uninitialised RAM reads as
+    /// all zero, and an erased block reads as all <c>0xFF</c>.
+    /// </summary>
+    private static bool IsUniform(byte[] memory, ushort address, int length)
+    {
+        if (address + length > memory.Length)
+        {
+            return true;
+        }
+
+        byte first = memory[address];
+
+        for (int i = 1; i < length; i++)
+        {
+            if (memory[address + i] != first)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

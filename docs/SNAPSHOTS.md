@@ -127,8 +127,8 @@ A sequence of blocks:
 - flag `0x00` = header: type, 10-character name, length, parameter 1, parameter 2
 - flag `0xFF` = data: the payload the previous header described
 
-Type `3` (CODE) has `parameter 1` = start/auto-run address and `parameter 2` =
-load address. Type `0` (program) always loads at `0x8000` behind a BASIC stub.
+Type `3` (CODE) and type `0` (program) are the ones that matter. A program
+always loads at `0x8000` behind a BASIC stub.
 
 **A tape is not a snapshot.** It carries no registers, no ROM and no stack.
 
@@ -149,12 +149,11 @@ The CODE blocks load at `0x8000`, but the game starts at `0x8400` — the first
 1K is data tables. Starting at the load address runs the data and then sits
 there doing nothing.
 
-So `Core/TapeLoader.cs` resolves the entry point in this order:
+So `Core/TapeLoader.cs` collects every block first and places them afterwards,
+because two decisions need the whole tape:
 
-1. **`RANDOMIZE USR n` from the BASIC program block** — authoritative.
-2. CODE block `parameter 1` (start address).
-3. CODE block `parameter 2` (load address).
-4. `0x8000`.
+1. **The entry point**, from `RANDOMIZE USR n` in the BASIC program block.
+2. **Which header field is the load address** — see below.
 
 Tokenised BASIC stores `USR` as `0xC0`, and a number as `0x0E` plus five
 space-padded ASCII digits. Two encodings appear in real tapes:
@@ -166,6 +165,43 @@ space-padded ASCII digits. Two encodings appear in real tapes:
 
 Both are handled. The variant is what several tape-to-TZX converters emit, and
 missing it is the difference between a working lift and a blank screen.
+
+### The two header conventions
+
+A CODE header carries two addresses and real files disagree about their order:
+
+```
+  start address, load address      the ROM's own order
+  load address, start address      what some converters emit
+```
+
+A single-block game hides the difference. A multi-stage loader does not — and
+multi-stage loaders are how most commercial games ship.
+
+Two real examples, which disagree with each other:
+
+| Game | param 1 | param 2 | Loader calls | Block size |
+|---|---|---|---|---|
+| Atic Atac | `0x5B80` | `0x8000` | `USR 0x5B80` | 18 bytes |
+| Jet Set Willy | `0x7FFE` | `0x80FB` | `USR 0x8400` | 32 769 bytes |
+
+Atic Atac is only covered by `param 1`. Jet Set Willy is covered by **both**,
+because its block is 32K long — so "which one contains the entry point" cannot
+decide it alone.
+
+The loader applies three tests, in order:
+
+1. **Does the block fit?** A load address must let the block fit in the 64K
+   address space. Jet Set Willy's 32K block fits at `0x7FFE` and overflows at
+   `0x80FB`.
+2. **Does it cover the entry point?** If only one convention puts the entry
+   point inside a block, that is the answer. This settles Atic Atac.
+3. **Which addresses look like load addresses?** A block starts on a round
+   boundary (`0x8000`, `0x4000`, `0x5B00`); a start address is wherever the code
+   happens to begin (`0x80FB`).
+
+Whichever convention wins is recorded in `analysis.txt`, so a wrong guess is
+visible rather than mysterious.
 
 ## `.tzx`
 
@@ -191,6 +227,41 @@ are lost.
 
 The pipeline detects this and warns. Use a `.z80`, `.sna` or `.szx` snapshot of
 a 128K game instead — those carry the full bank set.
+
+### Tapes with unheadered data blocks
+
+Some tapes carry **one** header followed by several raw data blocks. The game's
+own routine loads the rest and decides the addresses at run time, so static
+placement cannot be right.
+
+Dizzy II is the example: one BASIC header, then five data blocks, and a loader
+that does `POKE 24576, 96` before `RANDOMIZE USR 24576` — it writes the entry
+point itself.
+
+### Relocating loaders
+
+A related case: the entry point is a valid address but lies **outside** every
+loaded block. The loader computes it at run time and copies the payload there.
+
+Batty uses Elite's *Uni-Loader*, whose BASIC program builds the address from
+variables (`RANDOMIZE USR z`, where `z` is assembled from `PEEK`s) and then
+moves code around before jumping. `param 1` names the entry point (`0xFCF1`)
+while the block itself loads at `0x6400`, so nothing is at the entry until the
+loader has run.
+
+Both cases are detected and reported:
+
+```
+4 of 5 data blocks carry no header: this tape is loaded by the game's
+own routine, so their addresses cannot be recovered statically.
+
+Entry point 0xFCF1 is not inside any loaded block: this tape relocates
+its code at run time, so the lift starts on uninitialised memory.
+```
+
+`analysis.txt` records the same, and `tools/demo.ps1` reports the game as
+**partial** rather than playable. Recovering these needs the tape loader
+emulated, which is [ROADMAP.md](../ROADMAP.md) Stage 6c.
 
 ## Bank mapping summary
 

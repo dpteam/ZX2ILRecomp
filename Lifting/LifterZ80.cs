@@ -9,19 +9,61 @@ namespace ZX2ILRecomp.Lifting;
 /// </summary>
 public sealed class LifterContext
 {
-    public LifterContext(ZxSnapshot snapshot, AnalysisResultZ80 model, string gameName)
+    public LifterContext(ZxSnapshot snapshot, AnalysisResultZ80 model, string gameName, bool pruneUnreachable = true)
     {
         Snapshot = snapshot;
         Model = model;
         DisplayName = string.IsNullOrWhiteSpace(gameName) ? "Game" : gameName;
         GameName = FileSystemUtil.SanitizeIdentifier(gameName);
 
-        List<ushort> labels = new(model.Labels);
-        labels.Sort();
-        Labels = labels;
-
         Entry = model.Entry != 0 ? model.Entry : (ushort)0x8000;
         HasEntry = model.Instructions.ContainsKey(Entry);
+
+        if (pruneUnreachable)
+        {
+            Labels = Reachability.Compute(model, BuildRoots(snapshot, model));
+        }
+        else
+        {
+            List<ushort> all = new(model.Labels);
+            all.Sort();
+            Labels = all;
+        }
+
+        DroppedLabels = Math.Max(0, model.Instructions.Count - Labels.Count);
+
+        Blocks = BasicBlocks.Build(model, Labels, Entry);
+        BlockStarts = BasicBlocks.MapStarts(Blocks);
+    }
+
+    /// <summary>
+    /// The addresses code can be entered at without being the target of a
+    /// decoded instruction: the entry point, the interrupt vectors, and anything
+    /// the user forced in <c>dynamic_targets.txt</c>.
+    ///
+    /// <see cref="AnalysisResultZ80.Functions"/> is deliberately not used here.
+    /// It also collects call and jump targets found by the linear sweep, so
+    /// using it as the root set would make every swept decode reachable and
+    /// defeat pruning entirely.
+    /// </summary>
+    private static List<ushort> BuildRoots(ZxSnapshot snapshot, AnalysisResultZ80 model)
+    {
+        List<ushort> roots = new() { model.Entry != 0 ? model.Entry : (ushort)0x8000 };
+
+        if (snapshot.HasRomCode)
+        {
+            roots.Add(0x0000);
+            roots.Add(0x0008);
+            roots.Add(0x0010);
+            roots.Add(0x0018);
+            roots.Add(0x0020);
+            roots.Add(0x0028);
+            roots.Add(0x0030);
+            roots.Add(0x0038);
+        }
+
+        roots.AddRange(model.DynamicTargets);
+        return roots;
     }
 
     public ZxSnapshot Snapshot { get; }
@@ -44,6 +86,19 @@ public sealed class LifterContext
     /// <summary>Every emitted label, ascending.</summary>
     public IReadOnlyList<ushort> Labels { get; }
 
+    /// <summary>The same labels grouped into basic blocks, one method each.</summary>
+    public IReadOnlyList<BasicBlocks.Block> Blocks { get; }
+
+    /// <summary>Address to the start of the block that contains it.</summary>
+    public IReadOnlyDictionary<ushort, ushort> BlockStarts { get; }
+
+    /// <summary>
+    /// Decoded instructions that did not earn a method because nothing reaches
+    /// them. They are data the linear sweep misread, and the interpreter covers
+    /// them if execution ever lands there.
+    /// </summary>
+    public int DroppedLabels { get; }
+
     public ushort Entry { get; }
 
     public bool HasEntry { get; }
@@ -62,13 +117,22 @@ public sealed class LifterZ80
 {
     private readonly LifterContext _ctx;
 
-    public LifterZ80(ZxSnapshot snapshot, AnalysisResultZ80 model, string gameName, int captureIconSeconds = 5)
+    public LifterZ80(ZxSnapshot snapshot, AnalysisResultZ80 model, string gameName, int captureIconSeconds = 5, bool pruneUnreachable = true)
     {
-        _ctx = new LifterContext(snapshot, model, gameName)
+        _ctx = new LifterContext(snapshot, model, gameName, pruneUnreachable)
         {
             CaptureIconSeconds = Math.Max(0, captureIconSeconds)
         };
     }
+
+    /// <summary>How many decoded instructions were dropped as unreachable.</summary>
+    public int DroppedLabels => _ctx.DroppedLabels;
+
+    /// <summary>How many methods were emitted.</summary>
+    public int EmittedLabels => _ctx.Labels.Count;
+
+    /// <summary>How many methods were emitted, after block merging.</summary>
+    public int EmittedBlocks => _ctx.Blocks.Count;
 
     public string Generate()
     {

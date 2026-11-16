@@ -33,6 +33,14 @@ public sealed class CliOptions
     public bool LinearSweep = true;
 
     /// <summary>
+    /// Emit a method only for code that is actually reachable. The linear sweep
+    /// decodes data as instructions; without this filter a 48K game produces
+    /// 9 MB of C# and the C# compiler becomes the bottleneck. Off only for
+    /// debugging a lift where pruning is suspected.
+    /// </summary>
+    public bool PruneUnreachable = true;
+
+    /// <summary>
     /// Skip ROM discovery and always use the pseudo-ROM. The self-test sets
     /// this so its results do not depend on whether the machine happens to have
     /// a <c>48.rom</c> lying around.
@@ -135,6 +143,12 @@ public sealed class CliOptions
             if (Is(a, "--no-sweep", "--power-on-only"))
             {
                 o.LinearSweep = false;
+                continue;
+            }
+
+            if (Is(a, "--no-prune", "--keep-unreachable"))
+            {
+                o.PruneUnreachable = false;
                 continue;
             }
 

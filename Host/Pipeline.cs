@@ -344,17 +344,26 @@ public sealed class Pipeline
             Log.Warn("Undecoded opcode 0x" + op.ToString("X2", CultureInfo.InvariantCulture));
         }
 
+        // 8. Generate C#.
+        LifterZ80 lifter = new(snapshot, model, safeName, _options.CaptureIconSeconds, _options.PruneUnreachable);
+        string source = lifter.Generate();
+
+        Log.Info(string.Format(
+            CultureInfo.InvariantCulture,
+            "Code generation: {0} blocks from {1} instructions, {2} decoded instructions pruned as unreachable",
+            lifter.EmittedBlocks,
+            lifter.EmittedLabels,
+            lifter.DroppedLabels));
+
         AnalysisReport.Write(
             Path.Combine(workDir, "analysis.txt"),
             fullPath,
             snapshot,
             model,
             forced,
-            romPath);
-
-        // 8. Generate C#.
-        LifterZ80 lifter = new(snapshot, model, safeName, _options.CaptureIconSeconds);
-        string source = lifter.Generate();
+            romPath,
+            lifter.EmittedBlocks,
+            lifter.DroppedLabels);
 
         if (_options.SaveSource)
         {

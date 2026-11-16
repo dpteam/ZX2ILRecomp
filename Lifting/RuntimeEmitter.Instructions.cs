@@ -60,7 +60,9 @@ internal static partial class RuntimeEmitter
                 return;
         }
 
-        // DD/FD forms are executed by the interpreter: correct, just not inlined.
+        // DD/FD forms that need the interpreter (the (IX+d) group, the CB page,
+        // and the index-register instructions). Instructions where the prefix is
+        // ignored are decoded as their base opcode and never reach here.
         if (inst.Prefix != 0 && inst.Prefix != 0xCB && inst.Prefix != 0xED)
         {
             EmitDynamic(w, inst.Address);
@@ -82,6 +84,13 @@ internal static partial class RuntimeEmitter
 
     private static void EmitNormalExec(EmitWriter w, InstructionZ80 inst)
     {
+        if (inst.IgnoredIndexPrefix)
+        {
+            // DD/FD before a non-index instruction: the prefix costs four
+            // T-states and the base instruction runs unchanged.
+            w.Line("TStates += 4;");
+        }
+
         if (inst.Prefix == 0)
         {
             w.Line("ExecBase(0x" + inst.Opcode.ToString("X2", CultureInfo.InvariantCulture) + ", 0x" +
@@ -95,6 +104,61 @@ internal static partial class RuntimeEmitter
         {
             w.Line("ExecEDNormal(0x" + inst.Opcode.ToString("X2", CultureInfo.InvariantCulture) + ", 0x" +
                    inst.Operand.ToString("X4", CultureInfo.InvariantCulture) + ");");
+        }
+    }
+
+    /// <summary>
+    /// Emits an instruction that is <em>not</em> last in its block: its effect
+    /// runs, and control continues with the next instruction inline.
+    ///
+    /// Only instructions that can fall through without needing a dispatch entry
+    /// reach here — plain arithmetic, and conditional jumps whose taken branch
+    /// returns a target that is a block start anyway. CALL and RST never do,
+    /// because their return address must be a block start.
+    /// </summary>
+    private static void EmitInstructionBody(EmitWriter w, InstructionZ80 inst)
+    {
+        switch (inst.Control)
+        {
+            case OpControlZ80.Normal:
+                EmitNormalExec(w, inst);
+                return;
+
+            case OpControlZ80.Branch:
+            case OpControlZ80.Jmp:
+                w.Line("TStates += " + CpuZ80.BaseT[inst.Opcode].ToString(CultureInfo.InvariantCulture) + ";");
+
+                if (inst.IsDJNZ)
+                {
+                    w.Line("B = (byte)(B - 1);");
+                    w.Line("if (B != 0) return 0x" + inst.Target.ToString("X4", CultureInfo.InvariantCulture) + ";");
+                    return;
+                }
+
+                w.Line("if (Conditional(" + inst.Condition.ToString(CultureInfo.InvariantCulture) + ")) return 0x" +
+                       inst.Target.ToString("X4", CultureInfo.InvariantCulture) + ";");
+                return;
+
+            case OpControlZ80.Ret:
+                w.Line("TStates += " + CpuZ80.BaseT[inst.Opcode].ToString(CultureInfo.InvariantCulture) + ";");
+                w.Line("if (Conditional(" + inst.Condition.ToString(CultureInfo.InvariantCulture) + ")) return Pop16();");
+                return;
+
+            case OpControlZ80.Halt:
+                // HALT waits for an interrupt and then continues at the next
+                // instruction, so it can sit inside a block: the wait returns,
+                // the rest of the block runs.
+                w.Line("TStates += 4;");
+                w.Line("Halt();");
+                return;
+
+            default:
+                // Should be unreachable: BasicBlocks ends the block before any
+                // instruction that cannot continue inline. Fail loudly in the
+                // generated code rather than silently dropping an instruction.
+                w.Line("Trap(\"Instruction " + inst.Text.Replace("\"", "'") + " cannot continue inline.\");");
+                w.Line("return 0;");
+                return;
         }
     }
 

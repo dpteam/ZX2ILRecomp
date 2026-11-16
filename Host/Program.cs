@@ -255,6 +255,9 @@ internal static class Program
         sb.AppendLine("      --no-source         Do not keep the generated C#.");
         sb.AppendLine("      --keep-source       Keep the generated C# (default).");
         sb.AppendLine("      --no-sweep          Skip the linear sweep (recursive descent only).");
+        sb.AppendLine("      --no-prune          Emit a method for every decoded address, including");
+        sb.AppendLine("                          data the sweep misread. Slower to compile; for");
+        sb.AppendLine("                          debugging a lift.");
         sb.AppendLine("  -v, --verbose           Verbose pipeline and publish output.");
         sb.AppendLine();
         sb.AppendLine("Packaging:");

@@ -367,8 +367,8 @@ internal static class LifterTests
             TestHarness.Contains(source, "static class Ayu", "ay");
             TestHarness.Contains(source, "static class Audio", "audio");
             TestHarness.Contains(source, "class UlaForm : Form", "window");
-            TestHarness.Contains(source, "static ushort L8000()", "label method");
-            TestHarness.Contains(source, "case 0x8000: return L8000();", "dispatch entry");
+            TestHarness.Contains(source, "static ushort B8000()", "block method");
+            TestHarness.Contains(source, "case 0x8000: return B8000();", "dispatch entry");
             TestHarness.Contains(source, "public static void InitMemory()", "memory image");
             TestHarness.Contains(source, "headless: frames=", "headless summary");
         });
@@ -394,6 +394,62 @@ internal static class LifterTests
             TestHarness.Contains(source, "q80A", "base64 payload for AB CD");
         });
 
+        TestHarness.Test("ignored DD/FD prefix decodes as the base instruction", () =>
+        {
+            // `DD 00` is a NOP with an extra byte and four extra T-states. The
+            // CPU ignores the prefix. Dizzy II contains exactly this, and
+            // treating it as unsupported made the interpreter report
+            // "Unknown opcode $00" and trap.
+            ZxSnapshot snapshot = new() { PC = 0x8000, Entry = 0x8000 };
+
+            byte[] program =
+            {
+                0xDD, 0x00,             // NOP (prefix ignored)
+                0xDD, 0x3C,             // INC A (prefix ignored)
+                0xDD, 0x7E, 0x05        // LD A,(IX+5) (prefix used)
+            };
+
+            Array.Copy(program, 0, snapshot.RamBanks[2], 0, program.Length);
+            DisassemblerZ80 disassembler = new(snapshot) { LinearSweep = false };
+
+            InstructionZ80 nop = disassembler.Decode(0x8000);
+            TestHarness.True(nop.Supported, "DD 00 is supported");
+            TestHarness.True(nop.IgnoredIndexPrefix, "flagged as an ignored prefix");
+            TestHarness.Equal(2, nop.Length, "prefix counted in the length");
+            TestHarness.Equal(OpControlZ80.Normal, nop.Control, "still falls through");
+            TestHarness.Equal(0x8002, (int)nop.Fallthrough, "falls through past the prefix");
+
+            InstructionZ80 inc = disassembler.Decode(0x8002);
+            TestHarness.True(inc.Supported, "DD 3C is supported");
+            TestHarness.Equal(0x3C, (int)inc.Opcode, "opcode is INC A, not the prefix");
+
+            InstructionZ80 indexed = disassembler.Decode(0x8004);
+            TestHarness.False(indexed.Supported, "DD 7E 05 still needs the interpreter");
+            TestHarness.False(indexed.IgnoredIndexPrefix, "indexed form is not ignored");
+        });
+
+        TestHarness.Test("ignored prefix keeps relative branch targets correct", () =>
+        {
+            // DD 18 dd: JR with an ignored prefix. The target must account for
+            // the prefix byte, or the branch lands one byte early.
+            ZxSnapshot snapshot = new() { PC = 0x8000, Entry = 0x8000 };
+
+            byte[] program =
+            {
+                0xDD, 0x18, 0x04,       // JR 0x8007
+                0x00, 0x00, 0x00, 0x00,
+                0xC3, 0x00, 0x80        // JP 0x8000
+            };
+
+            Array.Copy(program, 0, snapshot.RamBanks[2], 0, program.Length);
+            DisassemblerZ80 disassembler = new(snapshot) { LinearSweep = false };
+
+            InstructionZ80 jr = disassembler.Decode(0x8000);
+            TestHarness.Equal(OpControlZ80.Branch, jr.Control, "decoded as a branch");
+            TestHarness.Equal(0x8007, (int)jr.Target, "target includes the prefix byte");
+            TestHarness.Equal(0x8003, (int)jr.Fallthrough, "fall-through is past the operand");
+        });
+
         TestHarness.Test("no entry point is reported, not crashed", () =>
         {
             ZxSnapshot snapshot = new() { Entry = 0x9000, PC = 0x9000 };
@@ -402,6 +458,89 @@ internal static class LifterTests
 
             // The entry is always decoded, so a snapshot always has one label.
             TestHarness.True(model.Labels.Count >= 1, "at least the entry label");
+        });
+
+        TestHarness.Test("basic blocks merge fall-through runs", () =>
+        {
+            // INC A x3 then JP 0x8000. The three INCs fall through into each
+            // other, so they are one block; the JP ends it.
+            ZxSnapshot snapshot = new() { PC = 0x8000, Entry = 0x8000 };
+            snapshot.RamBanks[2][0] = 0x3C;   // INC A
+            snapshot.RamBanks[2][1] = 0x3C;   // INC A
+            snapshot.RamBanks[2][2] = 0x3C;   // INC A
+            snapshot.RamBanks[2][3] = 0xC3;   // JP 0x8000
+            snapshot.RamBanks[2][4] = 0x00;
+            snapshot.RamBanks[2][5] = 0x80;
+
+            DisassemblerZ80 disassembler = new(snapshot) { LinearSweep = false };
+            AnalysisResultZ80 model = disassembler.Analyze();
+
+            List<BasicBlocks.Block> blocks = BasicBlocks.Build(model, model.Labels, model.Entry);
+
+            TestHarness.Equal(1, blocks.Count, "one block");
+            TestHarness.Equal(4, blocks[0].Addresses.Count, "four instructions in it");
+            TestHarness.Equal(0x8000, (int)blocks[0].Start, "block starts at the entry");
+        });
+
+        TestHarness.Test("a call ends its block", () =>
+        {
+            // CALL 0x8010 pushes 0x8003. If the block continued past the call,
+            // the return would land in the middle of it with no dispatch entry.
+            ZxSnapshot snapshot = new() { PC = 0x8000, Entry = 0x8000 };
+            snapshot.RamBanks[2][0] = 0xCD;   // CALL 0x8010
+            snapshot.RamBanks[2][1] = 0x10;
+            snapshot.RamBanks[2][2] = 0x80;
+            snapshot.RamBanks[2][3] = 0x3C;   // INC A (the return address)
+            snapshot.RamBanks[2][4] = 0xC9;   // RET
+
+            DisassemblerZ80 disassembler = new(snapshot) { LinearSweep = false };
+            AnalysisResultZ80 model = disassembler.Analyze();
+
+            List<BasicBlocks.Block> blocks = BasicBlocks.Build(model, model.Labels, model.Entry);
+            Dictionary<ushort, ushort> starts = BasicBlocks.MapStarts(blocks);
+
+            TestHarness.Equal(0x8000, (int)starts[0x8000], "call is its own block");
+            TestHarness.Equal(0x8003, (int)starts[0x8003], "return address starts a block");
+            TestHarness.False(starts[0x8000] == starts[0x8003], "call and its return are separate");
+        });
+
+        TestHarness.Test("unreachable decodes are pruned", () =>
+        {
+            // A 48K game decodes ~48 000 addresses because the sweep reads data
+            // as code. Only reachable code should get methods.
+            ZxSnapshot snapshot = new() { PC = 0x8000, Entry = 0x8000 };
+            snapshot.RamBanks[2][0] = 0xC3;   // JP 0x8000
+            snapshot.RamBanks[2][1] = 0x00;
+            snapshot.RamBanks[2][2] = 0x80;
+
+            DisassemblerZ80 disassembler = new(snapshot) { LinearSweep = false };
+            AnalysisResultZ80 model = disassembler.Analyze();
+
+            List<ushort> reachable = Reachability.Compute(model, model.Functions);
+
+            TestHarness.True(reachable.Count >= 1, "entry is reachable");
+            TestHarness.True(reachable.Count <= model.Instructions.Count, "pruning never adds");
+        });
+
+        TestHarness.Test("interrupt vectors survive pruning", () =>
+        {
+            // The IM 1 handler is reached through a register, never through a
+            // decoded jump, so reachability only knows about it because the
+            // analyser marks the vectors as roots. Pruning it would push every
+            // frame interrupt through the interpreter.
+            ZxSnapshot snapshot = new() { PC = 0x8000, Entry = 0x8000 };
+            snapshot.InstallMinimalRom();
+            snapshot.RamBanks[2][0] = 0xC3;   // JP 0x8000
+            snapshot.RamBanks[2][1] = 0x00;
+            snapshot.RamBanks[2][2] = 0x80;
+
+            DisassemblerZ80 disassembler = new(snapshot) { LinearSweep = false };
+            AnalysisResultZ80 model = disassembler.Analyze();
+
+            List<ushort> reachable = Reachability.Compute(model, model.Functions);
+
+            TestHarness.True(reachable.Contains(0x0038), "IM 1 handler is kept");
+            TestHarness.True(reachable.Contains(0x0000), "RST 00 vector is kept");
         });
     }
 }

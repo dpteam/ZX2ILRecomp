@@ -75,6 +75,13 @@ public sealed class InstructionZ80
 
     /// <summary>True for <c>DJNZ</c>, which has its own B-decrement semantics.</summary>
     public bool IsDJNZ;
+
+    /// <summary>
+    /// True when the instruction was written with a <c>DD</c>/<c>FD</c> prefix
+    /// that the CPU ignores: the base instruction runs as written, and the
+    /// prefix only costs four extra T-states.
+    /// </summary>
+    public bool IgnoredIndexPrefix;
 }
 
 /// <summary>Everything the lifter needs to know about one snapshot.</summary>

@@ -69,14 +69,16 @@ public sealed class DisassemblerZ80
         {
             // RST vectors and the IM 1 handler. Without these the very first
             // interrupt lands on an address with no generated method.
-            Enqueue(0x0000);
-            Enqueue(0x0008);
-            Enqueue(0x0010);
-            Enqueue(0x0018);
-            Enqueue(0x0020);
-            Enqueue(0x0028);
-            Enqueue(0x0030);
-            Enqueue(0x0038);
+            //
+            // They are also recorded as function roots, not just enqueued: the
+            // interrupt dispatch reaches 0x0038 through a register, not through
+            // a decoded jump, so reachability analysis has no other way to know
+            // it is live code.
+            foreach (ushort vector in new ushort[] { 0x0000, 0x0008, 0x0010, 0x0018, 0x0020, 0x0028, 0x0030, 0x0038 })
+            {
+                Enqueue(vector);
+                _result.Functions.Add(vector);
+            }
         }
 
         foreach (ushort forced in ForcedAddresses)
@@ -312,6 +314,38 @@ public sealed class DisassemblerZ80
                 // Handled by the interpreter: correct but not inlined.
                 inst.Supported = false;
             }
+            else if (IsIgnoredPrefixOpcode(op2))
+            {
+                // DD/FD before an instruction that does not use IX/IY is simply
+                // ignored by the CPU: `DD 00` is a NOP that costs one extra byte
+                // and four extra T-states. Decoding it as "unsupported" sent it
+                // to the interpreter, which then reported "Unknown opcode $00"
+                // and trapped — Dizzy II does exactly this at 0x809C.
+                //
+                // The base instruction is decoded with the address shifted by
+                // one so that relative-branch arithmetic lands on the right
+                // target, then the length is restored to include the prefix.
+                inst.Prefix = 0;
+                inst.Opcode = op2;
+                inst.Length = CpuZ80.BaseLen[op2];
+
+                if (inst.Length >= 2)
+                {
+                    inst.Operand = Read8((ushort)(address + 2));
+                }
+
+                if (inst.Length == 3)
+                {
+                    inst.Operand |= (ushort)(Read8((ushort)(address + 3)) << 8);
+                }
+
+                SetBaseControl(inst, (ushort)(address + 1));
+                inst.Length += 1;
+                inst.Supported = true;
+
+                // The prefix costs four T-states but changes nothing else.
+                inst.IgnoredIndexPrefix = true;
+            }
             else
             {
                 inst.Length = PrefixedLength(op2);
@@ -354,8 +388,62 @@ public sealed class DisassemblerZ80
         return inst;
     }
 
-    private int PrefixedLength(byte op)
+    /// <summary>
+    /// True when a <c>DD</c>/<c>FD</c> prefix in front of this opcode changes
+    /// nothing and the base instruction runs as written.
+    ///
+    /// The prefix only means something for the (IX+d)/(IY+d) forms, the IXH/IXL
+    /// half-register forms, and the instructions that name the index register
+    /// outright (LD IX,nn, ADD IX,rr, PUSH IX, ...). Everything else ignores it.
+    /// </summary>
+    private static bool IsIgnoredPrefixOpcode(byte op)
     {
+        // (IX+d) forms and the CB page have their own decoding.
+        if (op == 0xCB || CpuZ80.UsesIXYDisp[op] != 0)
+        {
+            return false;
+        }
+
+        // Doubled prefixes are consumed one byte at a time by real silicon.
+        if (op is 0xDD or 0xFD or 0xED)
+        {
+            return false;
+        }
+
+        switch (op)
+        {
+            // LD IX,nn / LD (nn),IX / LD IX,(nn) / INC IX / DEC IX
+            case 0x21:
+            case 0x22:
+            case 0x2A:
+            case 0x23:
+            case 0x2B:
+            // INC IXH / DEC IXH / LD IXH,n and the IXL equivalents
+            case 0x24:
+            case 0x25:
+            case 0x26:
+            case 0x2C:
+            case 0x2D:
+            case 0x2E:
+            // POP IX / PUSH IX / EX (SP),IX / JP (IX) / LD SP,IX
+            case 0xE1:
+            case 0xE5:
+            case 0xE3:
+            case 0xE9:
+            case 0xF9:
+                return false;
+        }
+
+        // ADD IX,BC/DE/IX/SP
+        if ((op & 0xCF) == 0x09)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private int PrefixedLength(byte op)    {
         if (op == 0xCB)
         {
             return 4;

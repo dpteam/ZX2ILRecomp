@@ -30,16 +30,20 @@ while (true)
 }
 ```
 
-`StepStatic` dispatches on the high byte, then on the address, then calls
-`Lxxxx()`. Each `Lxxxx()` performs its instruction and returns the next address
-as a literal:
+`StepStatic` dispatches on the high byte, then on the block start address, then
+calls `Bxxxx()`. One method covers a whole basic block, so a straight run of
+instructions executes inline:
 
 ```csharp
-static ushort L8006()
+static ushort B8006()
 {
-    // INC A
+    // 8006  INC A
     ExecBase(0x3C, 0x0000);
-    return 0x8007;
+    // 8007  SRL A
+    ExecCB(0x3F);
+    // 8008  OUT (0xFE),A
+    ExecBase(0xD3, 0x00FE);
+    return 0x800A;
 }
 ```
 
@@ -48,8 +52,9 @@ Calls push a literal return address; returns pop it. That is the whole point of
 recompiling rather than interpreting.
 
 `StepDynamic` is the fallback: it decodes from memory at run time and executes
-one instruction through the interpreter. It exists for computed jumps and for
-the `DD`/`FD` pages.
+one instruction through the interpreter. It exists for computed jumps, for the
+`DD`/`FD` pages, and for the swept-but-unreachable decodes that
+`Core/Reachability.cs` pruned.
 
 ## Registers
 

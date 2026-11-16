@@ -99,6 +99,7 @@ output stays indented and readable:
 | File | Emits |
 |---|---|
 | `LifterZ80.cs` | the file header and the namespace; drives the others |
+| `BasicBlocks.cs` | groups instructions into methods (see below) |
 | `ProgramEmitter.cs` | `Main`, argument parsing, headless mode, console attach |
 | `RuntimeEmitter.*.cs` | registers, dispatch loop, instruction executor, helpers |
 | `MemoryEmitter.cs` | the 64K decoder and the AY register file |
@@ -106,18 +107,81 @@ output stays indented and readable:
 | `AudioEmitter.cs` | beeper + AY mixer over `waveOut` |
 | `FormEmitter.cs` | the window, key matrix, overlay, ICO writer |
 
-Every decoded address becomes one method:
+### Pruning first
+
+The linear sweep is deliberately greedy: it decodes everything in RAM that
+recursive descent did not reach, because jump-table-driven games keep real code
+in blocks the descent cannot prove reachable.
+
+The cost of that greed is measured, not guessed. On Arkanoid the sweep adds
+46 000 instructions but only 131 basic blocks, and the game executes the exact
+same 4 335 630 instructions over 600 frames either way — so the sweep
+contributed nothing but 3 MB of C# and seven seconds of compilation.
+
+`Core/Reachability.cs` therefore computes reachability as a proper fixed point
+over *real* control flow:
+
+* start from the roots — entry point, interrupt vectors, forced addresses;
+* follow fall-through and jump/call targets of instructions that are **already
+  known reachable**;
+* repeat until nothing new is found.
+
+The subtle part is that a target only counts when the instruction holding it is
+itself reachable. Visiting the targets of *every* decoded instruction — the
+obvious implementation — makes almost everything reachable, because swept
+garbage contains jumps pointing all over RAM, and the filter then prunes
+nothing.
+
+The same trap applies to `AnalysisResultZ80.Functions`: it collects call and
+jump targets found by the sweep too, so using it as the root set defeats pruning
+entirely. The roots are built explicitly in `LifterContext.BuildRoots`.
+
+Result on Arkanoid: 574 blocks from 2 290 instructions, 47 032 of 49 322 decoded
+addresses pruned (95%), 0.57 MB of C# instead of 3.4 MB.
+
+What the sweep is still good for: an address it decoded can be promoted by a
+decoded jump from reachable code, and a genuinely computed target is covered by
+the interpreter and reported through `dynamic_targets.log`, which feeds the next
+lift.
+
+### One method per basic block
+
+One method per instruction was the first design and it was wrong. It produced
+37 000 methods and 7 MB of C# for a 48K game, and the C# compiler became the
+bottleneck: **0.3 s to analyse, 2 minutes to compile**. It was also pure
+overhead at run time, because a straight run of twenty instructions became
+twenty dispatch round-trips.
+
+`Lifting/BasicBlocks.cs` groups instructions into maximal runs that are entered
+only at the first instruction and left only at the last. A block starts when an
+address is the entry point, the target of a jump/call/RST, or not the
+fall-through of the previous instruction.
+
+Two rules are easy to get wrong and are explicit in the code:
+
+* **A `CALL` or `RST` ends its block.** They push a return address; if the next
+  instruction were interior to the block, that return would land in the middle
+  of it with no dispatch entry.
+* **An unsupported instruction ends its block**, because it hands off to the
+  interpreter, which returns a computed address.
+
+The result for the same game: **3 100 methods, 3.2 MB, 9.6 s end to end** — a
+14× speedup with identical behaviour.
 
 ```csharp
-static ushort L8000()
+static ushort B8006()
 {
-    // LD A,0x07
-    ExecBase(0x3E, 0x0007);
-    return 0x8002;
+    // 8006  INC A
+    ExecBase(0x3C, 0x0000);
+    // 8007  SRL A
+    ExecCB(0x3F);
+    // 8008  OUT (0xFE),A
+    ExecBase(0xD3, 0x00FE);
+    return 0x800A;
 }
 ```
 
-and dispatch is three levels deep so no single `switch` grows to 65536 cases:
+Dispatch is still three levels deep, but only block starts appear in it:
 
 ```csharp
 static ushort StepStatic(ushort pc)
@@ -125,10 +189,6 @@ static ushort StepStatic(ushort pc)
     switch (pc >> 8) { case 0x80: return StepPage80(pc); ... default: return StepDynamic(pc); }
 }
 ```
-
-Instructions the lifter cannot inline (the `DD`/`FD` pages today) call
-`ExecDynamicOne`, which is the interpreter — correct, just slower, and reported
-so the next lift can improve on it.
 
 The opcode geometry tables (`CpuZ80`) are serialised into the generated file as
 decimal literals rather than recomputed there. A table bug then shows up as a

@@ -25,10 +25,12 @@ by the .NET SDK into a normal Windows game that renders through WinForms and
 plays through `winmm`.
 
 There is no Z80 interpreter in the hot path. Control flow becomes real C#
-methods, one per original address, and a three-level dispatch table
-(`pc >> 8` → page → address) walks them. An interpreter fallback still exists,
-but only for addresses the static analysis could not prove reachable — and it
-writes them to `dynamic_targets.log` so the next lift can inline them.
+methods — one per basic block of original code — and a three-level dispatch
+table (`pc >> 8` → page → address) walks them. An interpreter fallback still
+exists, but only for addresses the static analysis could not prove reachable —
+and it writes them to `dynamic_targets.log` so the next lift can inline them.
+
+A 48K game lifts, compiles and links in about ten seconds.
 
 ```
    game.z80
@@ -135,13 +137,16 @@ Aliases for `--full-exe`: `--self-contained`, `--standalone`.
    that survives 128K paging.
 2. **Fix up.** The model is applied first, then the ROM is located on disk,
    then the entry-point heuristics run. Order matters: a real snapshot may be
-   paused inside a ROM call, and forcing `0x8000` there would break it.
+   paused inside a ROM call, and forcing `0x8000` there would break it. For a
+   tape, the entry point comes from `RANDOMIZE USR n` in its BASIC loader.
 3. **Analyse.** Recursive descent from the entry point, the RST vectors and the
    IM 1 handler, followed by a linear sweep over the rest of RAM. The sweep is
    what turns jump-table-driven games from "half interpreted" into fully static.
-4. **Emit.** One method per address, plus a runtime carrying CPU helpers, the
-   memory decoder, the ULA, the AY and the window.
-5. **Package.** `dotnet publish` produces the apphost and embeds the icon.
+4. **Prune.** Only code that is actually reachable earns a method; swept data
+   tables stay with the interpreter.
+5. **Emit.** One method per basic block, plus a runtime carrying CPU helpers,
+   the memory decoder, the ULA, the AY and the window.
+6. **Package.** `dotnet publish` produces the apphost and embeds the icon.
 
 Full detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -180,9 +185,9 @@ To see what the tool does with real games:
 powershell -File tools/demo.ps1
 ```
 
-Every snapshot is lifted into `bin/recompiled/<name>/`, run headlessly for a few
-hundred frames and screenshotted. The output is git-ignored: these are builds of
-copyrighted games, and only the script is committed.
+Every snapshot is lifted into `bin/recompiled/<name>/`, run headlessly and
+screenshotted. The output is git-ignored: these are builds of copyrighted games,
+and only the script is committed.
 
 ```
 bin/recompiled/Manic Miner/
@@ -191,7 +196,13 @@ bin/recompiled/Manic Miner/
   analysis.txt
   frame.png        <- the screenshot the headless run took
   demo.txt         <- what that run reported
+  lift.log         <- the lifter's own output
 ```
+
+A game counts as **playable** only when its rendered frame contains more than
+two colours. That is deliberate: a lift can run for hundreds of frames without
+trapping and still draw nothing, and a loader heuristic can be wrong in both
+directions. The picture cannot.
 
 ## Requirements
 

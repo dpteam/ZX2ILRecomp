@@ -23,7 +23,9 @@ public static class AnalysisReport
         ZxSnapshot snapshot,
         AnalysisResultZ80 model,
         IReadOnlyList<ushort> forced,
-        string? romPath)
+        string? romPath,
+        int emittedMethods,
+        int prunedInstructions)
     {
         StringBuilder sb = new();
 
@@ -36,6 +38,8 @@ public static class AnalysisReport
         sb.AppendLine("rom           : " + (romPath is null ? "none (pseudo-ROM installed)" : romPath));
         sb.AppendLine("entry         : 0x" + snapshot.Entry.ToString("X4", CultureInfo.InvariantCulture));
         sb.AppendLine("instructions  : " + model.Instructions.Count.ToString(CultureInfo.InvariantCulture));
+        sb.AppendLine("methods       : " + emittedMethods.ToString(CultureInfo.InvariantCulture) + " (one per basic block)");
+        sb.AppendLine("pruned        : " + prunedInstructions.ToString(CultureInfo.InvariantCulture) + " (unreachable, left to the interpreter)");
         sb.AppendLine("labels        : " + model.Labels.Count.ToString(CultureInfo.InvariantCulture));
         sb.AppendLine("functions     : " + model.Functions.Count.ToString(CultureInfo.InvariantCulture));
         sb.AppendLine("indirect jumps: " + model.IndirectJumps.Count.ToString(CultureInfo.InvariantCulture));

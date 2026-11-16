@@ -219,7 +219,12 @@ internal static partial class RuntimeEmitter
         w.Line("Alu((op >> 3) & 7, GetR8IX(src, isIX));");
         w.Line("return;");
         w.Close();
-        w.Line("UnknownOpcode(op, LastPC);");
+        w.Blank();
+        w.Line("// Anything left ignores the prefix entirely: run the base instruction.");
+        w.Line("// PfT[op] already includes the four T-states the prefix costs, so undo");
+        w.Line("// what ExecBase is about to add rather than double-charging.");
+        w.Line("TStates -= BaseT[op];");
+        w.Line("ExecBase(op, val);");
         w.Close();
         w.Blank();
     }
